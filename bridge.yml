@@ -18,16 +18,52 @@ commands:
     description: Run the development entrypoint
     category: dev
     cwd: .
-    run: ["npm", "run", "dev"]
+    run: ['npm', 'run', 'dev']
 
   test:
     description: Run tests
     category: test
     cwd: .
-    run: ["npm", "test"]
+    run: ['npm', 'test']
 
   build:
     description: Run the build command
     category: build
     cwd: .
-    run: ["npm", "run", "build"]
+    run: ['npm', 'run', 'build']
+
+  typecheck:
+    description: Typecheck all workspaces
+    category: lint
+    cwd: .
+    run: ['npm', 'run', 'typecheck']
+
+  lint:
+    description: Lint the monorepo
+    category: lint
+    cwd: .
+    run: ['npm', 'run', 'lint']
+
+  check:
+    description: Run the full non-browser verification gate
+    category: test
+    cwd: .
+    run: ['npm', 'run', 'check']
+
+  e2e:
+    description: Run browser end-to-end tests
+    category: test
+    cwd: .
+    run: ['npm', 'run', 'test:e2e']
+
+  version-check:
+    description: Validate SemVer and synchronized workspace versions
+    category: lint
+    cwd: .
+    run: ['npm', 'run', 'version:check']
+
+  release-check:
+    description: Run the full release verification gate including browser E2E
+    category: test
+    cwd: .
+    run: ['npm', 'run', 'check:release']

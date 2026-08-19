@@ -1,0 +1,20 @@
+{
+  "name": "@e2e-col/sidecar",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/main.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --root ../.. apps/sidecar/src"
+  },
+  "dependencies": {
+    "@e2e-col/protocol": "0.0.1",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.5"
+  }
+}

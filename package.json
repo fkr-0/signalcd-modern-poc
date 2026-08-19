@@ -1,17 +1,41 @@
 {
   "name": "e2e-col",
-  "version": "0.1.0",
-  "description": "Exploration and modernization of signal-based collaborative documents concepts.",
-  "main": "src/index.js",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Modern E2EE collaborative-document implementation inspired by SignalCD.",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "test": "jest",
-    "build": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "npm run dev -w @e2e-col/web",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:core": "vitest run packages/core packages/protocol packages/transport packages/testing",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:list": "playwright test --list",
+    "test:storage": "vitest run packages/storage",
+    "test:sidecar": "vitest run apps/sidecar",
+    "version:check": "node scripts/check-version.js",
+    "check": "npm run version:check && npm run typecheck && npm run lint && npm run format:check && npm run test && npm run build",
+    "check:release": "npm run check && npm run test:e2e"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "devDependencies": {
-    "jest": "^29.0.0"
+    "@eslint/js": "^9.34.0",
+    "@playwright/test": "^1.55.0",
+    "eslint": "^9.34.0",
+    "fake-indexeddb": "^6.2.2",
+    "globals": "^16.3.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.40.0",
+    "vitest": "^3.2.4"
   }
 }

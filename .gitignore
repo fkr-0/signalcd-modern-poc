@@ -1,9 +1,15 @@
 node_modules/
 dist/
+upstream/.git/
+*.tsbuildinfo
 build/
 .env
 .env.local
 *.log
 coverage/
+.playwright/
+playwright-report/
+test-results/
 .nyc_output/
 .DS_Store
+.ws-bridge/

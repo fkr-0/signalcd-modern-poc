@@ -1,0 +1,27 @@
+{
+  "name": "@e2e-col/web",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@e2e-col/core": "0.0.1",
+    "@e2e-col/protocol": "0.0.1",
+    "@e2e-col/storage": "0.0.1",
+    "@e2e-col/transport": "0.0.1",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "@vitejs/plugin-react": "^5.0.2",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.3",
+    "vite-plugin-wasm": "^3.5.0"
+  }
+}
