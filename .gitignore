@@ -3,6 +3,13 @@ dist/
 upstream/.git/
 *.tsbuildinfo
 build/
+.gradle/
+local.properties
+.idea/
+*.iml
+*.apk
+*.aab
+captures/
 .env
 .env.local
 *.log
@@ -13,5 +20,4 @@ test-results/
 .nyc_output/
 .DS_Store
 .ws-bridge/
-pnpm-lock.yaml
 pnpm-debug.log

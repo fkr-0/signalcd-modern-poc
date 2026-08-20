@@ -112,10 +112,17 @@ export class IndexedDbCollaborativeStorage implements DurableCollaborativeStorag
   }): Promise<void> {
     const db = await this.dbPromise
     const tx = db.transaction([DOCUMENTS, OUTBOUND], 'readwrite')
-    tx.objectStore(DOCUMENTS).put(cloneDocument(input.document))
-    const outbound = tx.objectStore(OUTBOUND)
-    for (const record of input.outbound) outbound.put(cloneOutbound(record))
-    await complete(tx)
+    const done = complete(tx)
+    try {
+      tx.objectStore(DOCUMENTS).put(cloneDocument(input.document))
+      const outbound = tx.objectStore(OUTBOUND)
+      for (const record of input.outbound) outbound.put(cloneOutbound(record))
+    } catch (error) {
+      abortTransaction(tx)
+      await done.catch(() => undefined)
+      throw error
+    }
+    await done
   }
 
   async persistRemoteState(input: {
@@ -124,16 +131,23 @@ export class IndexedDbCollaborativeStorage implements DurableCollaborativeStorag
   }): Promise<void> {
     const db = await this.dbPromise
     const tx = db.transaction([DOCUMENTS, SEEN], 'readwrite')
-    tx.objectStore(DOCUMENTS).put(cloneDocument(input.document))
-    const seen = tx.objectStore(SEEN)
-    for (const value of input.seen) {
-      const stored: StoredSeenMessage = {
-        ...value,
-        key: seenKey(value.documentId, value.messageId)
+    const done = complete(tx)
+    try {
+      tx.objectStore(DOCUMENTS).put(cloneDocument(input.document))
+      const seen = tx.objectStore(SEEN)
+      for (const value of input.seen) {
+        const stored: StoredSeenMessage = {
+          ...value,
+          key: seenKey(value.documentId, value.messageId)
+        }
+        seen.put(stored)
       }
-      seen.put(stored)
+    } catch (error) {
+      abortTransaction(tx)
+      await done.catch(() => undefined)
+      throw error
     }
-    await complete(tx)
+    await done
   }
 
   async commitAccessChange(input: {
@@ -144,21 +158,28 @@ export class IndexedDbCollaborativeStorage implements DurableCollaborativeStorag
   }): Promise<void> {
     const db = await this.dbPromise
     const tx = db.transaction([ACCESS_CONTROL, OUTBOUND, SEEN], 'readwrite')
-    tx.objectStore(ACCESS_CONTROL).put({
-      documentId: input.documentId,
-      state: cloneAccessState(input.access)
-    })
-    const outbound = tx.objectStore(OUTBOUND)
-    for (const record of input.outbound) outbound.put(cloneOutbound(record))
-    const seen = tx.objectStore(SEEN)
-    for (const value of input.seen ?? []) {
-      const stored: StoredSeenMessage = {
-        ...value,
-        key: seenKey(value.documentId, value.messageId)
+    const done = complete(tx)
+    try {
+      tx.objectStore(ACCESS_CONTROL).put({
+        documentId: input.documentId,
+        state: cloneAccessState(input.access)
+      })
+      const outbound = tx.objectStore(OUTBOUND)
+      for (const record of input.outbound) outbound.put(cloneOutbound(record))
+      const seen = tx.objectStore(SEEN)
+      for (const value of input.seen ?? []) {
+        const stored: StoredSeenMessage = {
+          ...value,
+          key: seenKey(value.documentId, value.messageId)
+        }
+        seen.put(stored)
       }
-      seen.put(stored)
+    } catch (error) {
+      abortTransaction(tx)
+      await done.catch(() => undefined)
+      throw error
     }
-    await complete(tx)
+    await done
   }
 
   async markOutboundAttempt(recordIds: readonly string[], attemptedAt: number): Promise<void> {
@@ -222,6 +243,16 @@ function openDatabase(factory: IDBFactory, name: string): Promise<IDBDatabase> {
     openRequest.onsuccess = () => resolve(openRequest.result)
     openRequest.onerror = () => reject(openRequest.error ?? new Error('IndexedDB open failed'))
   })
+}
+
+function abortTransaction(tx: IDBTransaction): void {
+  try {
+    tx.abort()
+  } catch (error) {
+    // Preserve the original write/setup error if the transaction was already
+    // made inactive by the IndexedDB implementation.
+    if (!(error instanceof DOMException && error.name === 'InvalidStateError')) throw error
+  }
 }
 
 function request<T>(value: IDBRequest<T>): Promise<T> {

@@ -1,6 +1,7 @@
 import { expect, type Page, test } from '@playwright/test'
 
-const toyBaseUrl = 'http://127.0.0.1:18080'
+const toyPort = process.env.E2E_COL_TEST_TOY_PORT ?? '18080'
+const toyBaseUrl = `http://127.0.0.1:${toyPort}`
 
 async function register(page: Page, name: string) {
   await page.goto('/')
@@ -9,7 +10,7 @@ async function register(page: Page, name: string) {
   await page.getByRole('button', { name: 'Create identity' }).click()
   await expect(page.getByRole('heading', { name: 'Your encrypted workspace.' })).toBeVisible()
   await expect(page.locator('textarea')).toHaveCount(1)
-  await expect(page.getByRole('status')).toContainText('Ready')
+  await expect(page.getByRole('status')).toContainText(/ready\s*·\s*online/i)
 }
 
 interface StoredIdentityClaim {
@@ -80,7 +81,7 @@ async function openEncryptedGroup(page: Page, groupId: string, documentId: strin
     `/?group=${encodeURIComponent(groupId)}&document=${encodeURIComponent(documentId)}`
   )
   await expect(page.getByRole('heading', { name: 'Your encrypted workspace.' })).toBeVisible()
-  await expect(page.getByRole('status')).toContainText('Ready')
+  await expect(page.getByRole('status')).toContainText(/ready\s*·\s*online/i)
   await expect(page.locator('textarea')).toHaveCount(1)
   await expect(page.getByText('Encrypted mock Signal group')).toBeVisible()
 }
@@ -91,7 +92,7 @@ test('registers one browser-owned identity and exposes one editor session', asyn
   await expect(page.getByLabel('Current identity')).toContainText('Ada')
   await expect(page.getByTestId('identity-phone')).toHaveText(/^\+1555000\d{4}$/)
   await expect(page.getByText('Browser-owned keys')).toBeVisible()
-  await expect(page.getByText('Local-first persistence')).toBeVisible()
+  await expect(page.getByText(/Documents stay local-first/i)).toBeVisible()
 })
 
 test('restores the same identity and local document after browser reload', async ({ page }) => {
@@ -223,7 +224,7 @@ test('two isolated browser clients converge through recipient-bound encrypted to
     const bobPhoneBeforeReload = await bobPage.getByTestId('identity-phone').textContent()
     await bobPage.reload()
     await expect(bobPage.getByRole('heading', { name: 'Your encrypted workspace.' })).toBeVisible()
-    await expect(bobPage.getByRole('status')).toContainText('Ready')
+    await expect(bobPage.getByRole('status')).toContainText(/ready\s*·\s*online/i)
     await expect(bobPage.getByTestId('identity-phone')).toHaveText(bobPhoneBeforeReload ?? '')
     await expect(bobPage.locator('textarea')).toHaveValue(bobText)
     await expect(bobPage.locator('textarea')).toHaveCount(1)

@@ -196,13 +196,18 @@ export class DeterministicTransportNetwork {
       const directive = this.matchFault(sequence, source.id, target.id)
       if (directive?.drop) {
         source.recordDropped()
-        target.signalRecovery({
+        const recovery = {
           documentId,
           sourceId: source.id,
           targetId: target.id,
           sendSequence: sequence,
           reason: 'dropped-frame'
-        })
+        } as const
+        // The receiver needs to expose degraded/recovering state, while the
+        // sender is the replica that can publish a checkpoint containing the
+        // missing update. Notify both ends without interpreting protocol bytes.
+        target.signalRecovery(recovery)
+        source.signalRecovery(recovery)
         continue
       }
 
@@ -283,13 +288,15 @@ export class DeterministicTransportNetwork {
           this.offlineBacklog.set(target.id, backlog)
         } else {
           source?.recordDropped()
-          target.signalRecovery({
+          const recovery = {
             documentId: delivery.documentId,
             sourceId: delivery.sourceId,
             targetId: target.id,
             sendSequence: delivery.sendSequence,
             reason: 'dropped-frame'
-          })
+          } as const
+          target.signalRecovery(recovery)
+          source?.signalRecovery(recovery)
         }
         continue
       }

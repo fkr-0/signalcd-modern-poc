@@ -13,6 +13,9 @@ export class CollaborativeClient {
 
   constructor(private readonly options: CollaborativeClientOptions) {
     if (!options.senderId) throw new TypeError('senderId must be non-empty')
+    const threshold = options.recovery?.snapshotThresholdOutboundEntries
+    if (threshold !== undefined && (!Number.isSafeInteger(threshold) || threshold < 1))
+      throw new RangeError('snapshotThresholdOutboundEntries must be a positive safe integer')
     this.now = options.clock?.now.bind(options.clock) ?? Date.now
     this.createDocumentId = options.ids?.createDocumentId.bind(options.ids) ?? createId
     this.createMessageId = options.ids?.createMessageId.bind(options.ids) ?? createId
@@ -91,6 +94,13 @@ export class CollaborativeClient {
       createMessageId: this.createMessageId,
       ...(this.options.identity === undefined ? {} : { identity: this.options.identity }),
       replayAttemptedOnReconnect: this.options.recovery?.replayAttemptedOnReconnect ?? true,
+      publishSnapshotOnRecoverySignal:
+        this.options.recovery?.publishSnapshotOnRecoverySignal ?? true,
+      ...(this.options.recovery?.snapshotThresholdOutboundEntries === undefined
+        ? {}
+        : {
+            snapshotThresholdOutboundEntries: this.options.recovery.snapshotThresholdOutboundEntries
+          }),
       onClosed: () => this.sessions.delete(documentId)
     })
     this.sessions.set(documentId, session)

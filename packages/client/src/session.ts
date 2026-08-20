@@ -48,6 +48,8 @@ interface DocumentSessionOptions {
   readonly now: () => number
   readonly createMessageId: () => string
   readonly replayAttemptedOnReconnect: boolean
+  readonly publishSnapshotOnRecoverySignal: boolean
+  readonly snapshotThresholdOutboundEntries?: number
   readonly onClosed: () => void
 }
 
@@ -66,6 +68,7 @@ export class DocumentSession implements DocumentSessionCommands {
   private inboundReady = false
   private readonly bufferedInbound: Uint8Array[] = []
   private replayInFlight = false
+  private recoveryInFlight = false
   private status: SessionStatus
 
   constructor(private readonly options: DocumentSessionOptions) {
@@ -76,6 +79,79 @@ export class DocumentSession implements DocumentSessionCommands {
       transport: options.transport.getState(),
       pendingOutbound: 0,
       recoveryRequired: false
+    }
+  }
+
+  private canPublishSnapshot(): boolean {
+    const self = this.activeParticipant(this.options.senderId)
+    return Boolean(self && self.role !== 'reader' && !this.access.archived && !this.access.deleted)
+  }
+
+  private scheduleRecoveryCheckpoint(): void {
+    if (this.recoveryInFlight || this.closed || !this.canPublishSnapshot()) return
+    this.recoveryInFlight = true
+    void this.createCheckpoint(true)
+      .then(() => {
+        if (!this.closed && this.options.transport.getState() === 'online')
+          this.setStatus({ phase: 'ready', recoveryRequired: false })
+      })
+      .catch((cause: unknown) => {
+        this.reportError(
+          'recovery-failed',
+          'Document checkpoint recovery could not be completed',
+          true,
+          cause
+        )
+      })
+      .finally(() => {
+        this.recoveryInFlight = false
+      })
+  }
+
+  private async maybeCheckpoint(): Promise<void> {
+    const threshold = this.options.snapshotThresholdOutboundEntries
+    if (threshold === undefined || this.closed) return
+    const records = await this.options.storage.listOutbound(this.documentId)
+    const crdtHistory = records.filter(
+      (record) => record.kind === 'automerge-change' || record.kind === 'snapshot'
+    )
+    if (crdtHistory.length < threshold) return
+    await this.createCheckpoint(this.syncMode === 'auto')
+  }
+
+  private async createCheckpoint(sendNow: boolean): Promise<void> {
+    const recipients = this.activeParticipants()
+    if (!recipients.some((participant) => participant.participantId !== this.options.senderId)) {
+      await this.persistDocument()
+      return
+    }
+
+    // Capture the history before the checkpoint. Only CRDT changes/snapshots
+    // are semantically covered by the new snapshot. Membership/lifecycle
+    // records remain replayable because document bytes do not encode ACL state.
+    const prior = await this.options.storage.listOutbound(this.documentId)
+    const safeRecordIds = prior
+      .filter((record) => record.kind === 'automerge-change' || record.kind === 'snapshot')
+      .map((record) => record.id)
+    const now = this.options.now()
+    const snapshot = await this.createOutbound('snapshot', this.document.save(), recipients)
+    await this.options.storage.commitLocalChange({
+      document: this.storedDocument(this.document, now),
+      outbound: [snapshot]
+    })
+    this.status = { ...this.status, lastPersistedAt: now }
+    if (safeRecordIds.length > 0) {
+      await this.options.storage.compactOutbound(this.documentId, {
+        safeRecordIds,
+        retainAtLeast: 1
+      })
+    }
+    await this.refreshPending()
+
+    if (sendNow && this.options.transport.getState() === 'online') {
+      await this.sendRecords([snapshot])
+    } else if (this.options.transport.getState() !== 'online') {
+      this.setStatus({ phase: 'offline', recoveryRequired: true })
     }
   }
 
@@ -101,6 +177,7 @@ export class DocumentSession implements DocumentSessionCommands {
       this.options.transport.subscribeState((event) => this.handleTransportState(event.current)),
       this.options.transport.subscribeRecovery(() => {
         this.setStatus({ phase: 'recovering', recoveryRequired: true })
+        if (this.options.publishSnapshotOnRecoverySignal) this.scheduleRecoveryCheckpoint()
       })
     )
 
@@ -162,6 +239,11 @@ export class DocumentSession implements DocumentSessionCommands {
 
   async spliceText(edit: TextEdit): Promise<void> {
     await this.applyLocalEdit((document) => document.spliceText(edit))
+  }
+
+  async publishSnapshot(): Promise<void> {
+    this.assertWritable()
+    await this.createCheckpoint(true)
   }
 
   async flush(): Promise<void> {
@@ -324,6 +406,7 @@ export class DocumentSession implements DocumentSessionCommands {
     this.emit({ type: 'document', view: this.getView() })
     await this.refreshPending()
     await this.afterLocalOutbound(outbound)
+    await this.maybeCheckpoint()
   }
 
   private async afterLocalOutbound(records: readonly OutboundRecord[]): Promise<void> {
@@ -439,7 +522,13 @@ export class DocumentSession implements DocumentSessionCommands {
         seen: [{ documentId: this.documentId, messageId: envelope.messageId, seenAt: now }]
       })
       this.document = working
-      this.status = { ...this.status, lastReceivedAt: now, lastPersistedAt: now }
+      this.status = {
+        ...this.status,
+        phase: this.options.transport.getState() === 'online' ? 'ready' : this.status.phase,
+        recoveryRequired: false,
+        lastReceivedAt: now,
+        lastPersistedAt: now
+      }
       this.emit({ type: 'document', view: this.getView() })
       this.emit({ type: 'status', status: this.getStatus() })
       return
@@ -657,6 +746,7 @@ export class DocumentSession implements DocumentSessionCommands {
       documentId: this.documentId,
       payload: wire,
       createdAt: now,
+      kind,
       state: 'pending'
     }
   }

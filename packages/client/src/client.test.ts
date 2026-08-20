@@ -108,6 +108,157 @@ describe('CollaborativeClient and DocumentSession', () => {
     await bob.close()
   })
 
+  it('repairs a dropped increment with a durable snapshot checkpoint', async () => {
+    const network = new DeterministicTransportNetwork({
+      faults: [
+        {
+          send: 1,
+          from: `alice:${documentA}`,
+          to: `bob:${documentA}`,
+          drop: true
+        }
+      ]
+    })
+    const storageAlice = new MemoryCollaborativeStorage()
+    const storageBob = new MemoryCollaborativeStorage()
+    const participants: readonly DocumentParticipant[] = [
+      { participantId: 'alice', role: 'admin', active: true },
+      { participantId: 'bob', role: 'writer', active: true }
+    ]
+    const alice = createClient({
+      senderId: 'alice',
+      network,
+      storage: storageAlice,
+      identity: identity(participants)
+    })
+    const bob = createClient({
+      senderId: 'bob',
+      network,
+      storage: storageBob,
+      identity: identity(participants)
+    })
+    const aliceSession = await alice.createDocument({ documentId: documentA })
+    const aliceStored = await storageAlice.loadDocument(documentA)
+    if (!aliceStored) throw new Error('alice document was not persisted')
+    await storageBob.saveDocument(aliceStored)
+    await storageBob.saveAccessControl(documentA, {
+      selfRole: 'writer',
+      participants,
+      archived: false,
+      deleted: false,
+      revision: 0
+    })
+    const bobSession = await bob.openDocument(documentA)
+
+    await aliceSession.editText('recovered from a dropped increment')
+    network.flush()
+    await tick()
+    await tick()
+
+    expect(bobSession.getView().text).toBe('recovered from a dropped increment')
+    expect(bobSession.getStatus().recoveryRequired).toBe(false)
+    expect(await storageAlice.listOutbound(documentA)).toEqual([
+      expect.objectContaining({ kind: 'snapshot', state: 'attempted' })
+    ])
+
+    await alice.close()
+    await bob.close()
+  })
+
+  it('recovers a reader from a dropped edit without letting the reader publish a snapshot', async () => {
+    const network = new DeterministicTransportNetwork({
+      faults: [
+        {
+          send: 1,
+          from: `alice:${documentA}`,
+          to: `bob:${documentA}`,
+          drop: true
+        }
+      ]
+    })
+    const storageAlice = new MemoryCollaborativeStorage()
+    const storageBob = new MemoryCollaborativeStorage()
+    const participants: readonly DocumentParticipant[] = [
+      { participantId: 'alice', role: 'admin', active: true },
+      { participantId: 'bob', role: 'reader', active: true }
+    ]
+    const alice = createClient({
+      senderId: 'alice',
+      network,
+      storage: storageAlice,
+      identity: identity(participants)
+    })
+    const bob = createClient({
+      senderId: 'bob',
+      network,
+      storage: storageBob,
+      identity: identity(participants)
+    })
+    const aliceSession = await alice.createDocument({ documentId: documentA })
+    const aliceStored = await storageAlice.loadDocument(documentA)
+    if (!aliceStored) throw new Error('alice document was not persisted')
+    await storageBob.saveDocument(aliceStored)
+    await storageBob.saveAccessControl(documentA, {
+      selfRole: 'reader',
+      participants,
+      archived: false,
+      deleted: false,
+      revision: 0
+    })
+    const bobSession = await bob.openDocument(documentA)
+
+    await aliceSession.editText('reader catches up from writer checkpoint')
+    network.flush()
+    await tick()
+    await tick()
+
+    expect(bobSession.getView().text).toBe('reader catches up from writer checkpoint')
+    expect(bobSession.getStatus().recoveryRequired).toBe(false)
+    await expect(bobSession.publishSnapshot()).rejects.toMatchObject({
+      code: 'authorization-denied'
+    })
+    expect(await storageBob.listOutbound(documentA)).toHaveLength(0)
+    await alice.close()
+    await bob.close()
+  })
+
+  it('compacts only CRDT history when an explicit snapshot supersedes it', async () => {
+    const storage = new MemoryCollaborativeStorage()
+    const participants: readonly DocumentParticipant[] = [
+      { participantId: 'alice', role: 'admin', active: true },
+      { participantId: 'bob', role: 'writer', active: true }
+    ]
+    const client = createClient({ storage, identity: identity(participants) })
+    const session = await client.createDocument({ documentId: documentA })
+    session.setSyncMode('manual')
+
+    await session.editText('first')
+    await session.archive()
+    await session.unarchive()
+    const before = await storage.listOutbound(documentA)
+    expect(before.map((record) => record.kind)).toEqual(['automerge-change', 'archive', 'archive'])
+
+    await session.publishSnapshot()
+    const after = await storage.listOutbound(documentA)
+    expect(after.some((record) => record.kind === 'automerge-change')).toBe(false)
+    expect(after.filter((record) => record.kind === 'archive')).toHaveLength(2)
+    expect(after.some((record) => record.kind === 'snapshot')).toBe(true)
+    await client.close()
+  })
+
+  it('rejects invalid snapshot checkpoint thresholds', () => {
+    expect(
+      () =>
+        new CollaborativeClient({
+          senderId: 'alice',
+          storage: new MemoryCollaborativeStorage(),
+          identity: identity(),
+          transportFactory: () => new DeterministicTransportNetwork().createTransport('alice'),
+          recovery: { snapshotThresholdOutboundEntries: 0 }
+        })
+    ).toThrow('positive safe integer')
+  })
+
   it('converges signed removals and blocks the removed participant from future edits', async () => {
     const network = new DeterministicTransportNetwork()
     const storageAlice = new MemoryCollaborativeStorage()

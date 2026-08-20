@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto'
 import type { DocumentAccessState } from '@e2e-col/protocol'
 import { describe, expect, it } from 'vitest'
 import { IndexedDbCollaborativeStorage, MemoryCollaborativeStorage } from './index'
-import { cloneAccessState } from './storage'
+import { cloneAccessState, type OutboundRecord } from './storage'
 
 const access: DocumentAccessState = {
   selfRole: 'admin',
@@ -172,5 +172,35 @@ describe('cloneAccessState', () => {
 
     expect(original.participants[0]!.role).toBe('admin')
     expect(original.participants[0]!.active).toBe(true)
+  })
+})
+
+describe('IndexedDbCollaborativeStorage transaction boundaries', () => {
+  it('rolls back the snapshot when an outbound write cannot be queued', async () => {
+    const store = new IndexedDbCollaborativeStorage({
+      name: `e2e-col-atomic-${crypto.randomUUID()}`
+    })
+    const malformed = {
+      documentId: 'atomic-doc',
+      payload: new Uint8Array([9]),
+      createdAt: 1,
+      state: 'pending'
+    } as unknown as OutboundRecord
+
+    await expect(
+      store.commitLocalChange({
+        document: {
+          documentId: 'atomic-doc',
+          snapshot: new Uint8Array([1, 2, 3]),
+          updatedAt: 1
+        },
+        outbound: [malformed]
+      })
+    ).rejects.toBeDefined()
+
+    // Let the aborted/failed transaction settle before observing another one.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    expect(await store.loadDocument('atomic-doc')).toBeUndefined()
+    await store.close()
   })
 })

@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
+## [Unreleased]
+
+### Added
+
+- Durable client checkpoint recovery: transport recovery signals now trigger a
+  persisted full-document snapshot that is replayable across reconnects, and
+  `DocumentSession.publishSnapshot()` exposes the same explicit recovery primitive.
+- Optional snapshot-history thresholds in the client recovery policy for replacing
+  accumulated CRDT increments with a retained checkpoint.
+- E2EE integration test suite exercising the full path: identity → encrypt →
+  transport → decrypt → CRDT merge → convergence, including admin invite, role
+  enforcement, and removal scenarios.
+- Experimental Android integration spec (`docs/android-integration.md`) with
+  three Signal secret access approaches, document-channel agreement protocol,
+  and5-milestone implementation plan.
+- Roadmap document (`docs/ROADMAP.md`) with P0-P4 priority tiers covering
+  production gaps, feature gaps, platform extensions, and testing gaps.
+
+### Changed
+
+- Client outbound records now retain their protocol kind so snapshot compaction can
+  remove only CRDT change/snapshot history while preserving membership, archive, and
+  delete transitions that are not represented by document snapshots.
+- Browser E2E can select an isolated toy-daemon port with
+  `E2E_COL_TEST_TOY_PORT`, allowing encrypted Playwright runs to coexist with
+  unrelated localhost services instead of requiring port 18080 to be free.
+- `extend.yml` progress section updated to reflect P1-P4 DONE, P5-P7 PARTIAL.
+
+### Fixed
+
+- IndexedDB multi-store commits now explicitly abort on synchronous write-setup
+  failures, preventing a snapshot from committing without its matching outbound
+  record. Recovery snapshots also respect reader/archive/delete write restrictions.
+
 ## [0.0.2] - 2026-08-20
 
 ### Added

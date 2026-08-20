@@ -128,15 +128,19 @@ describe('deterministic transport network', () => {
     await right.connect('doc-1')
 
     const received: number[] = []
-    const recovery: number[] = []
+    const targetRecovery: number[] = []
+    const sourceRecovery: number[] = []
     right.subscribe((update) => received.push(update[0]!))
-    right.subscribeRecovery((event) => recovery.push(event.sendSequence))
+    right.subscribeRecovery((event) => targetRecovery.push(event.sendSequence))
+    left.subscribeRecovery((event) => sourceRecovery.push(event.sendSequence))
 
     await left.send(bytes(1))
     expect(received).toEqual([])
-    expect(recovery).toEqual([1])
+    expect(targetRecovery).toEqual([1])
+    expect(sourceRecovery).toEqual([1])
     expect(left.getMetrics().dropped).toBe(1)
     expect(right.getMetrics().recoverySignals).toBe(1)
+    expect(left.getMetrics().recoverySignals).toBe(1)
 
     // The transport does not interpret protocol kinds. A higher layer can react
     // to the recovery signal by sending an opaque snapshot/checkpoint payload.

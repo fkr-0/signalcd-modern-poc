@@ -19,127 +19,229 @@
 
 progress:
   last_audit: "2026-08-20"
-  overall: "P1 complete, P2 ~80%, P3-P6 not started"
+  overall: "P1-P4 DONE; P5-P7 PARTIAL"
+
+  audit_gate:
+    pnpm_run_check: "PASS — version sync, typecheck, Biome lint/format, 80 Vitest files / 744 tests, production build"
+    playwright_e2e: >
+      NOT_REVERIFIED in this audit: the suite could not start because 127.0.0.1:18080
+      was already occupied by the separate live TETRA decode. The encrypted two-browser
+      Playwright proof exists in tests/e2e/web.spec.ts; no repository test assertion failed.
 
   phases:
     P1_identity_foundation:
-      status: "COMPLETE"
+      status: "DONE"
       deliverables:
         - item: "@e2e-col/identity package"
           status: done
-          evidence: "packages/identity/src/ — 9 source files, 2 test files"
+          evidence: >
+            packages/identity/src/ contains browser identity/client/provider/storage,
+            encoding, encryption, and sync-log implementations with 4 test files.
         - item: "Identity provider endpoints in toy-signal-cli"
           status: done
-          evidence: "apps/toy-signal-cli/src/identity-registry.ts, tests in identity-api.test.ts"
+          evidence: "apps/toy-signal-cli/src/identity-registry.ts; identity-api.test.ts passes in pnpm run check"
         - item: "MockSignalTransport"
           status: done
-          evidence: "packages/transport/src/mock-signal-transport.ts, tests in mock-signal-transport.test.ts"
-        - item: "Browser registration screen"
+          evidence: "packages/transport/src/mock-signal-transport.ts; mock-signal-transport.test.ts passes"
+        - item: "Browser registration and durable identity restore"
           status: done
-          evidence: "apps/web/src/main.tsx — Registration component with identity flow"
+          evidence: "apps/web/src/main.tsx plus persisted IdentityClient/IndexedDbIdentityStorage integration"
 
     P2_encrypted_routing:
-      status: "SUBSTANTIALLY_COMPLETE"
+      status: "DONE"
       deliverables:
         - item: "Per-recipient envelope encryption"
           status: done
-          evidence: "packages/identity/src/encryption.ts, packages/protocol/src/encrypted-envelope.ts"
+          evidence: >
+            packages/identity/src/encryption.ts and packages/protocol/src/encrypted-envelope.ts;
+            encryption.test.ts verifies X25519 + HKDF-SHA-256 + AES-256-GCM and Ed25519 signatures.
         - item: "Encrypted routing in toy-signal-cli"
           status: done
-          evidence: "apps/toy-signal-cli/src/encrypted-router.ts, tests in encrypted-routing.test.ts"
+          evidence: >
+            apps/toy-signal-cli/src/encrypted-router.ts; encrypted-routing.test.ts verifies
+            recipient-specific opaque fanout, duplicate/delay behavior, and offline delivery.
         - item: "MockSignalTransport encryption integration"
           status: done
-          evidence: "packages/transport/src/mock-signal-transport.ts — fanout frame codec"
-        - item: "Two-tab encrypted demo"
-          status: partial
           evidence: >
-            Plumbing exists (wireCodec in main.tsx, BrowserReplicaWireCodec in session.ts)
-            but no integration test exercises the full encrypt->transport->decrypt E2E path.
-            Web app uses encrypted wireCodec when groupId is set.
-      gaps:
-        - "No E2E integration test for full encrypt->transport->decrypt path"
+            apps/web/src/client-adapter.ts encrypts/decrypts recipient envelopes and emits fanout frames;
+            packages/transport/src/mock-signal-transport.ts carries the frames.
+        - item: "Two-browser encrypted convergence proof"
+          status: done
+          evidence: >
+            tests/e2e/web.spec.ts contains an isolated two-browser test that exercises encrypted
+            A->B and B->A convergence, duplicate/delay injection, server plaintext absence, and reload.
+      verification_note: >
+        The Playwright proof now exists, closing the previous missing-test gap. Its current re-run
+        was environment-blocked by port 18080 being in use, so this audit does not claim a fresh
+        Playwright pass; the repository-wide pnpm run check gate itself is green.
 
     P3_access_control:
-      status: "NOT_STARTED"
+      status: "DONE"
       deliverables:
-        - item: "Membership payload codecs"
-          status: not_started
-          evidence: "EnvelopeKind includes membership/archive/delete but no payload codecs exist"
-        - item: "Access-control state management"
-          status: not_started
-          evidence: "@e2e-col/client package does not exist"
+        - item: "Membership/archive/delete payload codecs and signing preimages"
+          status: done
+          evidence: "packages/protocol/src/access-control.ts; access-control.test.ts (21 tests) passes"
+        - item: "Durable access-control state management"
+          status: done
+          evidence: >
+            packages/client/src/session.ts plus packages/storage access-control persistence;
+            access-control-storage.test.ts passes for memory and IndexedDB implementations.
         - item: "Invite/share UI"
-          status: not_started
-          evidence: "No share dialog in web app"
-        - item: "Role enforcement"
-          status: not_started
-          evidence: "No role checks before CRDT apply"
+          status: done
+          evidence: >
+            apps/web/src/CollaborativeWorkspace.tsx has the Share dialog, role selector,
+            group-member API call, and DocumentSession.inviteParticipant integration.
+        - item: "Role/removal/signature enforcement"
+          status: done
+          evidence: >
+            DocumentSession verifies signed control envelopes and rejects unauthorized writes;
+            client.test.ts covers reader blocking and convergent signed removal with future edits rejected.
 
     P4_session_model:
-      status: "NOT_STARTED"
+      status: "DONE"
       deliverables:
         - item: "CollaborativeClient + DocumentSession"
-          status: not_started
-          evidence: "@e2e-col/client not implemented; BrowserReplicaSession still used"
+          status: done
+          evidence: "packages/client/src/client.ts and packages/client/src/session.ts are implemented and tested"
         - item: "Auto-sync and manual-sync modes"
-          status: not_started
-          evidence: "No sync mode toggle"
+          status: done
+          evidence: "DocumentSession.setSyncMode/flush plus client tests for immediate and batched convergence"
         - item: "Sync status UI"
-          status: not_started
-          evidence: "Simple connected boolean only"
-        - item: "Multi-document support"
-          status: not_started
-          evidence: "Hardcoded defaultDocumentId in main.tsx"
+          status: done
+          evidence: >
+            CollaborativeWorkspace exposes session phase/transport state, pending outbound count,
+            Auto/Manual selection, and Sync now action.
+        - item: "Multi-document support and persistence"
+          status: done
+          evidence: >
+            CollaborativeClient create/open/list APIs and web document library exist;
+            client.test.ts verifies independent sessions and persisted metadata.
 
     P5_debug_tooling:
-      status: "NOT_STARTED"
+      status: "PARTIAL"
       deliverables:
         - item: "Debug decrypt mode"
-          status: not_started
+          status: partial
+          evidence: >
+            EncryptedMessageRouter has explicit debugDecrypt gating and a DebugEnvelopeDecryptor hook,
+            but the normal toy daemon does not install a decryptor. Toggling /__toy__/v1/config alone
+            therefore does not yet prove plaintext inspection of real encrypted traffic.
         - item: "Structured sync log"
-          status: not_started
+          status: done
+          evidence: >
+            apps/toy-signal-cli/src/sync-log.ts plus server poll/export/SSE endpoints;
+            sync-log.test.ts and sync-log-api.test.ts pass.
         - item: "Sync log panel UI"
-          status: not_started
+          status: done
+          evidence: "apps/web/src/SyncLogPanel.tsx is integrated into CollaborativeWorkspace"
         - item: "Export and filtering"
-          status: not_started
+          status: done
+          evidence: "SyncLogPanel filters level/direction and exports JSON; server exposes complete JSON export"
+      gaps:
+        - "Wire a real debugEnvelopeDecryptor into toy daemon debug mode and add encrypted-traffic plaintext verification"
 
     P6_production_readiness:
-      status: "NOT_STARTED"
-      note: "Blocked on P3-P5"
+      status: "PARTIAL"
+      deliverables:
+        - item: "Backend-neutral transport factory"
+          status: done
+          evidence: >
+            packages/transport/src/factory.ts selects deterministic/mock/websocket transports;
+            factory.test.ts passes.
+        - item: "signal-cli sidecar HTTP/SSE adapter"
+          status: done
+          evidence: >
+            apps/sidecar/src/signal-cli.ts implements loopback-by-default health/send/event/reconnect behavior;
+            signal-cli.test.ts and sidecar-e2e.test.ts pass.
+        - item: "Real Signal registration/identity provider"
+          status: not_started
+          evidence: "Browser identity provisioning still targets the mock identity API"
+        - item: "Production build exclusion of debug decrypt capability"
+          status: partial
+          evidence: >
+            Debug decryption is isolated to toy-signal-cli and requires explicit enablement,
+            but no build-time proof currently verifies that debug-decrypt code is absent from production artifacts.
+        - item: "Full web app against a real signal-cli sidecar"
+          status: partial
+          evidence: >
+            The WebSocket transport and sidecar contract exist, but the current E2E harness uses the toy
+            signal-cli implementation behind the real sidecar adapter rather than an external Signal account.
+      gaps:
+        - "Implement real Signal registration/identity provisioning"
+        - "Add production-bundle debug-code exclusion verification"
+        - "Run the full browser application against a real signal-cli sidecar/account"
+
+    P7_inspectable_dashboard:
+      status: "PARTIAL"
+      deliverables:
+        - item: "Inspector core"
+          status: done
+          evidence: >
+            apps/web/src/Dashboard.tsx and dashboard.css provide the sidebar/main/bottom layout,
+            identity/group/transport readouts, and workspace integration.
+        - item: "Read-only inspector event stream"
+          status: done
+          evidence: >
+            apps/web/src/inspector-events.ts implements a bounded sanitized event store,
+            transport instrumentation, and sidecar sync-event adaptation; inspector-events.test.ts passes.
+        - item: "Data pipeline visualization"
+          status: partial
+          evidence: >
+            Outbound/inbound chains, expandable nodes, latest-message highlighting, and measured metadata exist;
+            dedicated pipeline-run history and direct dedup/crdt_apply observations are not complete.
+        - item: "Traffic log"
+          status: partial
+          evidence: >
+            Dashboard.tsx implements columns, row expansion, direction/operation/participant/document/text filters,
+            JSON export, and hover-paused autoscroll; the specified time-range filter is still missing.
+        - item: "Server-state viewer and fault controls"
+          status: not_started
+          evidence: "Dashboard.tsx does not consume /__toy__/v1/state or expose fault injection controls"
+        - item: "Guided view"
+          status: partial
+          evidence: >
+            Ctrl+Shift+G/localStorage toggle, pipeline annotations, concept help, source links, and key explainers exist;
+            the live operation-walkthrough sidebar is not implemented.
+        - item: "Recorded session replay"
+          status: not_started
+          evidence: "No dashboard session recording/replay implementation exists"
 
   known_issues:
-    - id: BUG-1
-      severity: low
-      description: "DeterministicTransportNetwork was created unconditionally at module scope"
-      status: fixed
-      fix: "Lazy initialization via getNetwork() in main.tsx"
-    - id: BUG-2
-      severity: medium
-      description: "CryptoKeyPair type error in encrypted-routing.test.ts"
-      status: fixed
-      fix: "Used NodeCryptoKey + runtime type guard pattern from identity-api.test.ts"
     - id: ISSUE-1
       severity: medium
       description: "Identity storage lives in @e2e-col/identity instead of @e2e-col/storage"
       status: open
-      note: "Spec says IdentityStorage should be in @e2e-col/storage; currently co-located with identity package"
+      note: "Spec says IdentityStorage should be in @e2e-col/storage; current implementation remains co-located with identity"
     - id: ISSUE-2
       severity: low
-      description: "BrowserReplicaSession violates spec layering (imports core/protocol/storage/transport directly)"
-      status: open
-      note: "Should be replaced by @e2e-col/client (P4); acceptable as interim"
+      description: "BrowserReplicaSession layering was superseded by @e2e-col/client"
+      status: fixed
+      fix: "CollaborativeWorkspace now uses CollaborativeClient + DocumentSession from packages/client"
     - id: ISSUE-3
       severity: low
       description: "No integration test for full E2EE path (encrypt->transport->decrypt)"
+      status: fixed
+      fix: "tests/e2e/web.spec.ts now contains the two-browser recipient-bound encrypted convergence proof"
+    - id: ISSUE-4
+      severity: medium
+      description: "Toy debug-decrypt toggle has no production daemon decryptor implementation"
       status: open
+      note: "DebugEnvelopeDecryptor is optional and is not supplied by apps/toy-signal-cli/src/main.ts"
 
   test_coverage:
-    packages/identity: "2 test files covering client + encryption; missing provider/storage/encoding tests"
-    packages/protocol: "1 test file, good coverage"
-    packages/transport: "3 test files, good coverage"
-    packages/storage: "1 test file, good coverage"
-    apps/toy-signal-cli: "4 test files, good coverage"
-    apps/web: "0 test files"
+    last_pnpm_check: "PASS — 80 Vitest files / 744 tests"
+    packages/identity: "4 test files"
+    packages/protocol: "2 test files"
+    packages/transport: "4 test files"
+    packages/storage: "2 test files"
+    packages/client: "1 test file"
+    packages/testing: "2 test files"
+    apps/toy-signal-cli: "6 test files"
+    apps/sidecar: "2 test files"
+    apps/web: "1 test file (inspector-events.test.ts)"
+    playwright: >
+      tests/e2e/web.spec.ts exists with browser registration, reload persistence, isolated clients,
+      and encrypted two-browser convergence; current audit re-run was blocked before test execution by port 18080 contention.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. DESIGN PRINCIPLES
@@ -1244,9 +1346,30 @@ invariants:
 
 appendix_P7:
   name: "Inspectable Sidecar Dashboard"
-  status: "NOT_STARTED"
+  status: "PARTIAL"
   priority: "high — primary visibility into the toy sidecar's internal state"
   depends_on: "P1-P5 must be functionally complete before polishing UX"
+  implemented_files:
+    - path: "apps/web/src/Dashboard.tsx"
+      role: >
+        Inspector shell with identity/group/transport panels, live pipeline,
+        traffic log, guided-mode annotations, filtering, expansion, and JSON export.
+    - path: "apps/web/src/inspector-events.ts"
+      role: >
+        Bounded read-only diagnostic event store, secret-shaped field redaction,
+        transport instrumentation, and sidecar sync-log event adaptation.
+    - path: "apps/web/src/inspector-events.test.ts"
+      role: "Tests diagnostic redaction and byte-preserving transport instrumentation."
+    - path: "apps/web/src/dashboard.css"
+      role: "Dense responsive DevTools-style inspector layout and panel styling."
+    - path: "apps/web/src/CollaborativeWorkspace.tsx"
+      role: "Integrates the Dashboard and instruments the active transport/client flow."
+  remaining_scope:
+    - "Direct server-state viewer for /__toy__/v1/state plus deterministic fault controls"
+    - "Dedicated selectable history of prior pipeline runs and direct dedup/crdt_apply observations"
+    - "Traffic-log time-range filtering"
+    - "Guided live operation-walkthrough sidebar"
+    - "Recorded-session capture and replay"
 
   # ─── Design Philosophy ──────────────────────────────────────────────────
 
@@ -1563,6 +1686,10 @@ appendix_P7:
   implementation:
     - id: P7.1
       name: "Inspector core"
+      status: "DONE"
+      evidence: >
+        Dashboard.tsx now provides the sidebar + main pipeline + bottom traffic-log layout,
+        identity/public-key readout, group/member readout, and transport metrics/status panel.
       deliverables:
         - "Dashboard layout with sidebar + main pipeline + bottom log"
         - "Identity readout panel (key fingerprints, prekey pool, peers)"
@@ -1572,6 +1699,11 @@ appendix_P7:
 
     - id: P7.2
       name: "Data pipeline visualization"
+      status: "PARTIAL"
+      evidence: >
+        Dashboard.tsx renders outbound/inbound chains with expandable measured detail and latest-message
+        highlighting. inspector-events.ts plus client-adapter.ts instrument the real path. A dedicated
+        selectable history of prior pipeline runs and direct dedup/crdt_apply observations remain.
       deliverables:
         - "Horizontal pipeline with outbound and inbound node chains"
         - "Node expand/collapse with data detail (envelope JSON, hex dumps)"
@@ -1581,6 +1713,10 @@ appendix_P7:
 
     - id: P7.3
       name: "Traffic log"
+      status: "PARTIAL"
+      evidence: >
+        Dashboard.tsx implements the requested table fields, direction/operation/participant/document/text
+        filtering, expandable rows, JSON export, and hover-paused auto-scroll. Time-range filtering is absent.
       deliverables:
         - "Table with timestamp, direction, operation, sender, recipients, size, result"
         - "Filter bar (direction, operation, participant, document, time range, text search)"
@@ -1590,6 +1726,8 @@ appendix_P7:
 
     - id: P7.4
       name: "Server state viewer"
+      status: "NOT_STARTED"
+      evidence: "Dashboard.tsx currently has no /__toy__/v1/state reader, JSON tree, or fault controls."
       deliverables:
         - "JSON tree viewer for /__toy__/v1/state"
         - "Auto-refresh on changes"
@@ -1598,6 +1736,11 @@ appendix_P7:
 
     - id: P7.5
       name: "Guided view overlay"
+      status: "PARTIAL"
+      evidence: >
+        Dashboard.tsx implements the Ctrl+Shift+G/localStorage toggle, pipeline annotations,
+        concept help/tooltips, source links, and key explainers. The live operation-walkthrough sidebar
+        is still missing.
       deliverables:
         - "Toggle switch in dashboard header (Ctrl+Shift+G)"
         - "Pipeline node annotations (one-line explanations + paper badges)"
@@ -1608,6 +1751,8 @@ appendix_P7:
 
     - id: P7.6
       name: "Recorded session replay"
+      status: "NOT_STARTED"
+      evidence: "No recorded-session capture/replay implementation exists in the dashboard code."
       deliverables:
         - "Record a session's events to JSON"
         - "Replay recorded session in the pipeline viewer"

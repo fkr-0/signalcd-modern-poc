@@ -50,7 +50,7 @@ GET /api/v1/check
 | Failure | Non-200 status means daemon is unreachable |
 | Sidecar behavior | Called once in `start()`. If it fails, the backend throws and the sidecar refuses to start. |
 
-**Mock implementation:** Returns `{ ok: true, toy: true, contractVersion: 1 }`.
+**Mock implementation:** Returns the enhanced toy health view, for example `{ status: "ok", toy: true, apiVersion: 1, debugDecrypt: false, registeredIdentities: 0, activeGroups: 0 }` on a fresh server. The sidecar intentionally checks HTTP success rather than depending on those toy-only fields.
 
 **Production signal-cli:** Returns `{ ok: true }` or similar. The sidecar only
 checks `response.ok`, so any 200-level response is accepted.
@@ -255,8 +255,9 @@ GET /api/v1/check
 // - Sidecar calls this once in start()
 // - If non-200, sidecar throws and refuses to start
 
-// Expected output (mock)
-{ ok: true, toy: true, contractVersion: 1 }
+// Expected output (mock, fresh server)
+{ status: "ok", toy: true, apiVersion: 1, debugDecrypt: false,
+  registeredIdentities: 0, activeGroups: 0 }
 
 // Expected output (production)
 { ok: true }  // or any 200-level response

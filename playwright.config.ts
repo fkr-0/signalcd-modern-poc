@@ -1,5 +1,11 @@
 import { defineConfig, devices } from '@playwright/test'
 
+const toyPort = process.env.E2E_COL_TEST_TOY_PORT ?? '18080'
+if (!/^\d{1,5}$/.test(toyPort) || Number(toyPort) < 1 || Number(toyPort) > 65535)
+  throw new Error('E2E_COL_TEST_TOY_PORT must be a TCP port between 1 and 65535')
+const toyBaseUrl = `http://127.0.0.1:${toyPort}`
+const toyWebSocketUrl = `ws://127.0.0.1:${toyPort}/api/v1/messages`
+
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: true,
@@ -29,13 +35,12 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: 'TOY_SIGNAL_CLI_PORT=18080 pnpm --filter @e2e-col/toy-signal-cli dev',
-      url: 'http://127.0.0.1:18080/api/v1/check',
+      command: `TOY_SIGNAL_CLI_PORT=${toyPort} pnpm --filter @e2e-col/toy-signal-cli dev`,
+      url: `${toyBaseUrl}/api/v1/check`,
       reuseExistingServer: !process.env.CI
     },
     {
-      command:
-        'pnpm --filter @e2e-col/web build && pnpm --filter @e2e-col/web exec vite preview --host 127.0.0.1 --port 4174',
+      command: `VITE_E2E_COL_IDENTITY_URL=${toyBaseUrl} VITE_E2E_COL_MOCK_SIGNAL_URL=${toyWebSocketUrl} pnpm --filter @e2e-col/web build && pnpm --filter @e2e-col/web exec vite preview --host 127.0.0.1 --port 4174`,
       url: 'http://127.0.0.1:4174',
       reuseExistingServer: !process.env.CI
     }

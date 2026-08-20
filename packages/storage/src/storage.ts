@@ -1,4 +1,4 @@
-import type { DocumentAccessState } from '@e2e-col/protocol'
+import type { DocumentAccessState, NonChunkEnvelopeKind } from '@e2e-col/protocol'
 
 export interface DocumentMetadata {
   readonly title?: string
@@ -19,6 +19,12 @@ export interface OutboundRecord {
   readonly documentId: string
   readonly payload: Uint8Array
   readonly createdAt: number
+  /**
+   * Optional for schema compatibility with v0.0.2 records. New client records
+   * set this so recovery can compact CRDT history without discarding access
+   * control transitions that a document snapshot does not subsume.
+   */
+  readonly kind?: NonChunkEnvelopeKind
   readonly state?: 'pending' | 'attempted'
   readonly attempts?: number
   readonly lastAttemptAt?: number

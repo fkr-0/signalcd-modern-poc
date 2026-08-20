@@ -25,6 +25,14 @@ export interface ClientIdFactory {
 
 export interface RecoveryPolicy {
   readonly replayAttemptedOnReconnect?: boolean
+  /** Publish a durable full snapshot when the transport reports ambiguous loss. */
+  readonly publishSnapshotOnRecoverySignal?: boolean
+  /**
+   * Replace accumulated CRDT increment history with a retained snapshot after
+   * this many CRDT outbound records. Access-control records are never covered
+   * by this compaction threshold.
+   */
+  readonly snapshotThresholdOutboundEntries?: number
 }
 
 export interface IdentityEnvelopeContext {
@@ -92,6 +100,7 @@ export type ClientErrorCode =
   | 'transport-unavailable'
   | 'transport-closed'
   | 'authorization-denied'
+  | 'recovery-failed'
   | 'document-not-found'
   | 'internal'
 
@@ -124,6 +133,8 @@ export type SyncMode = 'auto' | 'manual'
 export interface DocumentSessionCommands {
   editText(nextText: string): Promise<void>
   spliceText(edit: TextEdit): Promise<void>
+  /** Persist and attempt delivery of a complete mergeable CRDT checkpoint. */
+  publishSnapshot(): Promise<void>
   inviteParticipant(phoneNumber: string, role: DocumentRole): Promise<void>
   setParticipantRole(participantId: string, role: DocumentRole): Promise<void>
   removeParticipant(participantId: string): Promise<void>

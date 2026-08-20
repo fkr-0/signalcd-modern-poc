@@ -2,6 +2,7 @@
   "name": "e2e-col",
   "version": "0.0.2",
   "private": true,
+  "packageManager": "pnpm@11.3.0",
   "description": "Modern E2EE collaborative-document implementation inspired by SignalCD.",
   "type": "module",
   "scripts": {
@@ -20,6 +21,8 @@
     "test:storage": "vitest run packages/storage",
     "test:sidecar": "vitest run apps/sidecar",
     "test:toy-signal-cli": "vitest run apps/toy-signal-cli",
+    "android:check": "apps/android/gradlew -p apps/android :core:model:test :core:protocol:test :core:sidecar:test",
+    "android:assemble": "apps/android/gradlew -p apps/android :app:assembleDebug",
     "demo:signal": "pnpm --filter @e2e-col/toy-signal-cli dev",
     "version:check": "node scripts/check-version.js",
     "check": "pnpm run version:check && pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run test && pnpm run build",
