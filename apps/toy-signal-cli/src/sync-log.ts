@@ -11,6 +11,7 @@ export interface SyncLogEntry {
   readonly envelopeKind?: string
   readonly messageId?: string
   readonly preview?: string
+  readonly debugError?: string
   readonly signatureValid?: boolean
   readonly rawSizeBytes?: number
 }
@@ -44,6 +45,7 @@ export class SyncEventLog {
       ...(input.envelopeKind === undefined ? {} : { envelopeKind: input.envelopeKind }),
       ...(input.messageId === undefined ? {} : { messageId: input.messageId }),
       ...(input.preview === undefined ? {} : { preview: input.preview.slice(0, 256) }),
+      ...(input.debugError === undefined ? {} : { debugError: input.debugError.slice(0, 64) }),
       ...(input.signatureValid === undefined ? {} : { signatureValid: input.signatureValid }),
       ...(input.rawSizeBytes === undefined ? {} : { rawSizeBytes: input.rawSizeBytes })
     }
@@ -67,6 +69,13 @@ export class SyncEventLog {
   subscribe(listener: SyncLogListener): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+
+  redactPreviews(): void {
+    for (let index = 0; index < this.entries.length; index += 1) {
+      const { preview: _preview, ...entry } = this.entries[index]!
+      this.entries[index] = entry
+    }
   }
 
   reset(): void {

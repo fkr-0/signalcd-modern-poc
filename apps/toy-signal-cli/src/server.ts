@@ -16,7 +16,8 @@ import {
   type ToyInjectRequest,
   type ToySignalConfig
 } from './contract'
-import { type DebugEnvelopeDecryptor, EncryptedMessageRouter } from './encrypted-router'
+import { DebugObserverManager } from './debug-observer'
+import { EncryptedMessageRouter } from './encrypted-router'
 import { CollaborationGroupRegistry, GroupApiError } from './group-registry'
 import {
   IdentityApiError,
@@ -35,7 +36,6 @@ export interface ToySignalCliServerOptions {
   readonly config?: ToySignalConfig
   readonly now?: () => number
   readonly debugDecrypt?: boolean
-  readonly debugEnvelopeDecryptor?: DebugEnvelopeDecryptor
 }
 
 export class ToySignalCliServer {
@@ -48,6 +48,7 @@ export class ToySignalCliServer {
   private readonly fixedAccount: string | undefined
   private server: Server | undefined
   private sockets: WebSocketServer | undefined
+  private readonly debugObserver: DebugObserverManager
   private readonly encryptedMessages: EncryptedMessageRouter
 
   constructor(options: ToySignalCliServerOptions = {}) {
@@ -62,14 +63,16 @@ export class ToySignalCliServer {
     )
     this.groups = new CollaborationGroupRegistry(this.identities, options.now)
     this.syncLog = new SyncEventLog(options.now)
+    this.debugObserver = new DebugObserverManager(
+      options.debugDecrypt ?? process.env.E2E_COL_DEBUG_DECRYPT === 'true'
+    )
     this.encryptedMessages = new EncryptedMessageRouter(
       this.identities,
       this.groups,
       this.network,
       options.now,
       this.syncLog,
-      options.debugEnvelopeDecryptor,
-      options.debugDecrypt ?? process.env.E2E_COL_DEBUG_DECRYPT === 'true'
+      this.debugObserver
     )
   }
 
@@ -166,11 +169,18 @@ export class ToySignalCliServer {
         json(response, 200, this.stateView())
         return
       }
+      if (request.method === 'GET' && url.pathname === TOY_CONTROL_ENDPOINTS.debugObserverKey) {
+        const capability = await this.debugObserver.capability()
+        if (!capability) json(response, 404, { error: 'debug observer is disabled' })
+        else json(response, 200, capability)
+        return
+      }
       if (request.method === 'POST' && url.pathname === TOY_CONTROL_ENDPOINTS.config) {
         const value = await readJson(request)
         if (!isRecord(value) || typeof value.debugDecrypt !== 'boolean')
           throw new Error('debugDecrypt must be a boolean')
         this.encryptedMessages.setDebugDecrypt(value.debugDecrypt)
+        if (!value.debugDecrypt) this.syncLog.redactPreviews()
         json(response, 200, { debugDecrypt: this.debugDecrypt })
         return
       }
@@ -195,6 +205,7 @@ export class ToySignalCliServer {
         this.identities.reset(effectiveConfig.accounts.map((account) => account.account))
         this.groups.reset()
         this.encryptedMessages.reset()
+        this.debugObserver.reset()
         this.syncLog.reset()
         json(response, 200, this.stateView())
         return

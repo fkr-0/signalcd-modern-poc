@@ -11,6 +11,7 @@ export interface SyncLogEntry {
   readonly envelopeKind?: string
   readonly messageId?: string
   readonly preview?: string
+  readonly debugError?: string
   readonly signatureValid?: boolean
   readonly rawSizeBytes?: number
 }
@@ -102,6 +103,7 @@ function parseSyncLogEntry(value: unknown): SyncLogEntry {
     ...optionalString(record, 'envelopeKind'),
     ...optionalString(record, 'messageId'),
     ...optionalString(record, 'preview'),
+    ...optionalString(record, 'debugError'),
     ...(record.signatureValid === undefined
       ? {}
       : typeof record.signatureValid === 'boolean'

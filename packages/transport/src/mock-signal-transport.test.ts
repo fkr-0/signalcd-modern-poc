@@ -71,6 +71,7 @@ function setup() {
       return socket
     }
   })
+
   return { transport, sockets, urls }
 }
 
@@ -89,6 +90,20 @@ function ready(socket: FakeSocket) {
 }
 
 describe('MockSignalTransport', () => {
+  it('round-trips a separate debug observer copy without changing recipient ciphertext', () => {
+    const recipientPayload = new Uint8Array([7, 8, 9])
+    const observerPayload = new Uint8Array([90, 91, 92, 93])
+    const frame = encodeMockSignalFanoutFrame({
+      version: 1,
+      messageId,
+      recipients: [{ phoneNumber: '+15550000002', payload: recipientPayload }],
+      observer: { keyId: 'a'.repeat(64), payload: observerPayload }
+    })
+    const decoded = decodeMockSignalFanoutFrame(frame)
+    expect(decoded.recipients).toEqual([{ phoneNumber: '+15550000002', payload: recipientPayload }])
+    expect(decoded.observer).toEqual({ keyId: 'a'.repeat(64), payload: observerPayload })
+    expect(decoded.recipients[0]!.payload).not.toEqual(observerPayload)
+  })
   it('uses first-frame bearer authentication without putting credentials in the URL', async () => {
     const { transport, sockets, urls } = setup()
     const connecting = transport.connect(documentId)
@@ -178,5 +193,13 @@ describe('MockSignalTransport', () => {
         ]
       })
     ).toThrow(/duplicate recipient/)
+    expect(() =>
+      encodeMockSignalFanoutFrame({
+        version: 1,
+        messageId,
+        recipients: [{ phoneNumber: '+15550000002', payload: new Uint8Array([1]) }],
+        observer: { keyId: 'bad-key', payload: new Uint8Array([2]) }
+      })
+    ).toThrow(/debug observer keyId/)
   })
 })

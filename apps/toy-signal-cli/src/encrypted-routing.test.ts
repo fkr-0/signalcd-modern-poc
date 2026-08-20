@@ -175,6 +175,58 @@ describe('encrypted collaboration groups and routing', () => {
     )
     expect(await queuedDelivery).toEqual(new Uint8Array([21]))
   })
+
+  it('keeps recipient forwarding intact when a debug observer copy is malformed', async () => {
+    const server = new ToySignalCliServer({ port: 0, debugDecrypt: true })
+    running.push(server)
+    const { baseUrl } = await server.start()
+    const alice = await register(baseUrl, 'Debug sender')
+    const bob = await register(baseUrl, 'Debug recipient')
+    const documentId = '66666666-6666-4666-8666-666666666666'
+    const group = asRecord(
+      await (
+        await fetch(`${baseUrl}/api/v1/groups`, {
+          method: 'POST',
+          headers: authJson(alice.token),
+          body: JSON.stringify({ document_id: documentId })
+        })
+      ).json()
+    )
+    const groupId = String(group.group_id)
+    const add = await fetch(`${baseUrl}/api/v1/groups/${groupId}/members`, {
+      method: 'POST',
+      headers: authJson(alice.token),
+      body: JSON.stringify({ phone_number: bob.phone, role: 'writer' })
+    })
+    expect(add.status).toBe(200)
+    const aliceSocket = await connect(baseUrl, alice.token, groupId, documentId)
+    const bobSocket = await connect(baseUrl, bob.token, groupId, documentId)
+    const recipientCipher = new Uint8Array([31, 32, 33, 34])
+    const messageId = '77777777-7777-4777-8777-777777777777'
+    const delivery = nextBinary(bobSocket)
+    const ack = nextText(aliceSocket)
+    aliceSocket.send(
+      fanout(messageId, [[bob.phone, recipientCipher]], {
+        keyId: 'a'.repeat(64),
+        payload: new Uint8Array([1, 2, 3])
+      })
+    )
+    expect(await delivery).toEqual(recipientCipher)
+    expect(asRecord(JSON.parse(await ack))).toMatchObject({ type: 'ack', message_id: messageId })
+    const log = (await (await fetch(`${baseUrl}/__toy__/v1/sync-log/export`)).json()) as Array<
+      Record<string, unknown>
+    >
+    expect(log).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: 'decrypted',
+          messageId,
+          debugError: 'invalid-envelope'
+        })
+      ])
+    )
+    expect(log.find((entry) => entry.messageId === messageId)?.preview).toBeUndefined()
+  })
 })
 
 interface Registered {
@@ -289,7 +341,11 @@ async function reconnectWithPendingBinary(
   return { socket, delivery }
 }
 
-function fanout(messageId: string, recipients: readonly [string, Uint8Array][]): Uint8Array {
+function fanout(
+  messageId: string,
+  recipients: readonly [string, Uint8Array][],
+  observer?: { keyId: string; payload: Uint8Array }
+): Uint8Array {
   return new TextEncoder().encode(
     JSON.stringify({
       type: 'fanout',
@@ -298,7 +354,10 @@ function fanout(messageId: string, recipients: readonly [string, Uint8Array][]):
       recipients: recipients.map(([phone, payload]) => ({
         phone_number: phone,
         payload: base64(payload)
-      }))
+      })),
+      ...(observer === undefined
+        ? {}
+        : { debug_observer: { key_id: observer.keyId, payload: base64(observer.payload) } })
     })
   )
 }

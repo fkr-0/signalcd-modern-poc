@@ -130,6 +130,96 @@ test('keeps separate browser contexts as separate clients', async ({ browser }) 
   }
 })
 
+test('explicit toy debug mode decrypts only the separate observer copy into the sync-log preview', async ({
+  browser
+}) => {
+  const aliceContext = await browser.newContext()
+  const bobContext = await browser.newContext()
+  const alicePage = await aliceContext.newPage()
+  const bobPage = await bobContext.newPage()
+
+  try {
+    await register(alicePage, 'Debug observer Alice')
+    await register(bobPage, 'Debug observer Bob')
+    const alice = await storedIdentity(alicePage)
+    const bob = await storedIdentity(bobPage)
+    const documentId = crypto.randomUUID()
+    const groupId = await createEncryptedGroup(alice, bob, documentId)
+
+    const enableResponse = await fetch(`${toyBaseUrl}/__toy__/v1/config`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ debugDecrypt: true })
+    })
+    expect(enableResponse.status).toBe(200)
+    const capability = (await (
+      await fetch(`${toyBaseUrl}/__toy__/v1/debug/observer-key`)
+    ).json()) as Record<string, unknown>
+    expect(Object.keys(capability).sort()).toEqual(['algorithm', 'key_id', 'public_key', 'version'])
+    expect(JSON.stringify(capability)).not.toMatch(/private|session.?token|secret/i)
+
+    await Promise.all([
+      openEncryptedGroup(alicePage, groupId, documentId),
+      openEncryptedGroup(bobPage, groupId, documentId)
+    ])
+    const knownPlaintext = `observer-preview-${documentId}`
+    await alicePage.locator('textarea').fill(knownPlaintext)
+    await expect(bobPage.locator('textarea')).toHaveValue(knownPlaintext)
+
+    await expect
+      .poll(async () => {
+        const entries = (await (
+          await fetch(`${toyBaseUrl}/__toy__/v1/sync-log/export`)
+        ).json()) as Array<Record<string, unknown>>
+        return entries
+          .filter(
+            (entry) =>
+              entry.level === 'decrypted' &&
+              entry.documentId === documentId &&
+              entry.signatureValid === true
+          )
+          .map((entry) => String(entry.preview ?? ''))
+          .join('\n')
+      })
+      .toContain(knownPlaintext)
+
+    const stateText = await (await fetch(`${toyBaseUrl}/__toy__/v1/state`)).text()
+    expect(stateText).not.toContain(knownPlaintext)
+    expect(stateText).not.toContain(alice.sessionToken)
+    expect(stateText).not.toContain(bob.sessionToken)
+    const entries = (await (
+      await fetch(`${toyBaseUrl}/__toy__/v1/sync-log/export`)
+    ).json()) as Array<Record<string, unknown>>
+    const stripped = entries.map(({ preview: _preview, ...entry }) => entry)
+    expect(JSON.stringify(stripped)).not.toContain(knownPlaintext)
+    expect(JSON.stringify(entries)).not.toContain(alice.sessionToken)
+    expect(JSON.stringify(entries)).not.toContain(bob.sessionToken)
+
+    const disableResponse = await fetch(`${toyBaseUrl}/__toy__/v1/config`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ debugDecrypt: false })
+    })
+    expect(disableResponse.status).toBe(200)
+    const disabledEntries = (await (
+      await fetch(`${toyBaseUrl}/__toy__/v1/sync-log/export`)
+    ).json()) as Array<Record<string, unknown>>
+    expect(
+      disabledEntries.some(
+        (entry) => entry.documentId === documentId && entry.preview !== undefined
+      )
+    ).toBe(false)
+    expect(JSON.stringify(disabledEntries)).not.toContain(knownPlaintext)
+  } finally {
+    await fetch(`${toyBaseUrl}/__toy__/v1/config`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ debugDecrypt: false })
+    }).catch(() => undefined)
+    await Promise.all([aliceContext.close(), bobContext.close()])
+  }
+})
+
 test('two isolated browser clients converge through recipient-bound encrypted toy Signal routing', async ({
   browser
 }) => {

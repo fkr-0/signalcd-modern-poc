@@ -14,6 +14,7 @@ export { createTransportFactory } from './factory'
 export type { LoopbackPair } from './loopback'
 export { createLoopbackPair } from './loopback'
 export type {
+  MockSignalDebugObserverCopy,
   MockSignalFanoutFrame,
   MockSignalFanoutRecipient,
   MockSignalGroupMember,

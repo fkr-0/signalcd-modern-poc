@@ -21,6 +21,7 @@ export const TOY_CONTROL_ENDPOINTS = {
   faults: '/__toy__/v1/faults',
   inject: '/__toy__/v1/inject',
   config: '/__toy__/v1/config',
+  debugObserverKey: '/__toy__/v1/debug/observer-key',
   syncLog: '/__toy__/v1/sync-log',
   syncLogExport: '/__toy__/v1/sync-log/export'
 } as const
@@ -216,11 +217,21 @@ export const TOY_SIGNAL_CLI_API_SPEC = {
     payload: 'per-recipient opaque encrypted envelope',
     delivery: 'group fanout excluding sender plus sender acknowledgement'
   },
+  debugObserver: {
+    endpoint: TOY_CONTROL_ENDPOINTS.debugObserverKey,
+    availability: 'explicit debug mode only',
+    privateKey: 'toy-daemon-only; non-exportable and never serialized',
+    publicCapability: 'key_id + X25519 public_key only',
+    envelopeCryptography: 'separate X25519/HKDF-SHA-256/AES-256-GCM copy signed by sender Ed25519',
+    routing: 'observer copy is never delivered to collaboration participants',
+    rotation: 'disable/enable and toy reset invalidate prior key ids'
+  },
   syncLog: {
     stream: TOY_CONTROL_ENDPOINTS.syncLog,
     export: TOY_CONTROL_ENDPOINTS.syncLogExport,
     levels: ['wire', 'envelope', 'application', 'decrypted'],
-    decryptedPayloads: 'explicit debug mode only'
+    decryptedPayloads: 'explicit debug mode only',
+    observerFailures: 'safe error code only; no plaintext preview'
   },
   fidelity: {
     localDaemonApi: 'semantic',

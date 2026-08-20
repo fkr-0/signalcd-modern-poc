@@ -11,6 +11,7 @@ import type { WebSocketFactory, WebSocketLike } from './websocket-transport'
 const FANOUT_VERSION = 1 as const
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const PHONE_RE = /^\+[1-9][0-9]{7,14}$/
+const OBSERVER_KEY_ID_RE = /^[0-9a-f]{64}$/
 const encoder = new TextEncoder()
 const decoder = new TextDecoder('utf-8', { fatal: true })
 
@@ -31,10 +32,16 @@ export interface MockSignalFanoutRecipient {
   readonly payload: Uint8Array
 }
 
+export interface MockSignalDebugObserverCopy {
+  readonly keyId: string
+  readonly payload: Uint8Array
+}
+
 export interface MockSignalFanoutFrame {
   readonly version: typeof FANOUT_VERSION
   readonly messageId: string
   readonly recipients: readonly MockSignalFanoutRecipient[]
+  readonly observer?: MockSignalDebugObserverCopy
 }
 
 export interface MockSignalTransportOptions {
@@ -78,7 +85,15 @@ export function encodeMockSignalFanoutFrame(value: MockSignalFanoutFrame): Uint8
       recipients: frame.recipients.map((recipient) => ({
         phone_number: recipient.phoneNumber,
         payload: bytesToBase64(recipient.payload)
-      }))
+      })),
+      ...(frame.observer === undefined
+        ? {}
+        : {
+            debug_observer: {
+              key_id: frame.observer.keyId,
+              payload: bytesToBase64(frame.observer.payload)
+            }
+          })
     })
   )
 }
@@ -96,6 +111,16 @@ export function decodeMockSignalFanoutFrame(bytes: Uint8Array): MockSignalFanout
     throw new Error('mock Signal fanout frame has an unsupported type or version')
   if (!Array.isArray(record.recipients))
     throw new Error('mock Signal fanout recipients are required')
+  const observer =
+    record.debug_observer === undefined
+      ? undefined
+      : (() => {
+          const entry = asRecord(record.debug_observer)
+          return {
+            keyId: requiredString(entry.key_id, 'debug_observer.key_id'),
+            payload: base64ToBytes(requiredString(entry.payload, 'debug_observer.payload'))
+          }
+        })()
   return validateFanoutFrame({
     version: FANOUT_VERSION,
     messageId: requiredString(record.message_id, 'message_id'),
@@ -105,7 +130,8 @@ export function decodeMockSignalFanoutFrame(bytes: Uint8Array): MockSignalFanout
         phoneNumber: requiredString(recipient.phone_number, 'phone_number'),
         payload: base64ToBytes(requiredString(recipient.payload, 'payload'))
       }
-    })
+    }),
+    ...(observer === undefined ? {} : { observer })
   })
 }
 
@@ -407,6 +433,13 @@ function validateFanoutFrame(value: MockSignalFanoutFrame): MockSignalFanoutFram
   if (!Array.isArray(value.recipients) || value.recipients.length < 1)
     throw new Error('mock Signal fanout requires at least one recipient')
   const seen = new Set<string>()
+  const observer = value.observer
+  if (observer !== undefined) {
+    if (!OBSERVER_KEY_ID_RE.test(observer.keyId))
+      throw new Error('mock Signal debug observer keyId must be a lowercase SHA-256 hex digest')
+    if (!(observer.payload instanceof Uint8Array) || observer.payload.byteLength === 0)
+      throw new Error('mock Signal debug observer payload must contain bytes')
+  }
   return {
     version: FANOUT_VERSION,
     messageId: value.messageId,
@@ -419,7 +452,10 @@ function validateFanoutFrame(value: MockSignalFanoutFrame): MockSignalFanoutFram
       if (!(recipient.payload instanceof Uint8Array) || recipient.payload.byteLength === 0)
         throw new Error('mock Signal fanout recipient payload must contain bytes')
       return { phoneNumber: recipient.phoneNumber, payload: new Uint8Array(recipient.payload) }
-    })
+    }),
+    ...(observer === undefined
+      ? {}
+      : { observer: { keyId: observer.keyId, payload: new Uint8Array(observer.payload) } })
   }
 }
 

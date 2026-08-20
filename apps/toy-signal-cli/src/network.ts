@@ -342,7 +342,7 @@ export class ToySignalNetwork {
     timestamp: number
   ): Promise<void> {
     const group = this.groups.get(groupId)
-    if (!group) throw new ToyRpcError(-32602, `unknown group ${groupId}`)
+    if (!group) throw new ToyRpcError(-32000, 'group not found')
     if (!group.members.has(sender.account))
       throw new ToyRpcError(-32602, `account ${sender.account} is not a member of ${groupId}`)
 

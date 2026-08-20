@@ -1,6 +1,7 @@
 export * from './access-control'
 export * from './chunking'
 export * from './codec'
+export * from './debug-observer'
 export * from './dedup'
 export * from './encrypted-envelope'
 export * from './types'

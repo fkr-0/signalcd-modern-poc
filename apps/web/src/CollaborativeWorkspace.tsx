@@ -15,7 +15,11 @@ import {
 } from '@e2e-col/identity'
 import type { DocumentAccessState, DocumentRole } from '@e2e-col/protocol'
 import { IndexedDbCollaborativeStorage } from '@e2e-col/storage'
-import { createTransportFactory, type TransportFactory } from '@e2e-col/transport'
+import {
+  createTransportFactory,
+  type ObservableCollaborativeTransport,
+  type TransportFactory
+} from '@e2e-col/transport'
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { addGroupMember, createBrowserIdentityAdapter } from './client-adapter'
 import { Dashboard } from './Dashboard'
@@ -60,6 +64,7 @@ export function CollaborativeWorkspace({
   const [sharePhone, setSharePhone] = useState('')
   const [shareRole, setShareRole] = useState<DocumentRole>('writer')
   const [sharing, setSharing] = useState(false)
+  const [dashboardTransport, setDashboardTransport] = useState<ObservableCollaborativeTransport>()
   const syncLogClient = useMemo(() => new SyncLogClient({ baseUrl: identityServerUrl }), [])
 
   const showError = useCallback((cause: unknown): void => {
@@ -103,10 +108,16 @@ export function CollaborativeWorkspace({
     let active = true
     const identityClient = createIdentityClient()
     const storage = new IndexedDbCollaborativeStorage({ name: `e2e-col-${identity.userId}` })
-    const transportFactory = instrumentTransportFactory(
-      createBrowserTransportFactory(identity, binding.groupId, configuredTransport),
-      inspector
+    const browserTransportFactory = createBrowserTransportFactory(
+      identity,
+      binding.groupId,
+      configuredTransport
     )
+    const transportFactory = instrumentTransportFactory((context) => {
+      const transport = browserTransportFactory(context)
+      if (active) setDashboardTransport(transport)
+      return transport
+    }, inspector)
     const identityAdapter = createBrowserIdentityAdapter({
       identity,
       identityClient,
@@ -139,6 +150,7 @@ export function CollaborativeWorkspace({
       sessionUnsubscribeRef.current?.()
       sessionUnsubscribeRef.current = undefined
       clientRef.current = undefined
+      setDashboardTransport(undefined)
       void client.close().finally(() => identityClient.close())
     }
   }, [
@@ -298,6 +310,7 @@ export function CollaborativeWorkspace({
         {...(access === undefined ? {} : { access })}
         {...(status === undefined ? {} : { status })}
         transportLabel={transportLabel}
+        {...(dashboardTransport === undefined ? {} : { transport: dashboardTransport })}
         inspector={inspector}
         syncLogClient={syncLogClient}
         onShowWorkspace={() => setDashboardVisible(false)}

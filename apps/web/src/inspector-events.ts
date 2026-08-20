@@ -141,7 +141,12 @@ export function instrumentTransportFactory(
 export function appendSidecarSyncEvent(store: InspectorEventStore, entry: SyncLogEntry): void {
   const direction = entry.direction ?? 'internal'
   const operation = `sidecar_${entry.level}`
-  const result = entry.signatureValid === false ? 'error: signature invalid' : 'ok'
+  const result =
+    entry.debugError !== undefined
+      ? `error: ${entry.debugError}`
+      : entry.signatureValid === false
+        ? 'error: signature invalid'
+        : 'ok'
   const externalKey = [
     entry.timestamp,
     entry.level,
@@ -170,6 +175,7 @@ export function appendSidecarSyncEvent(store: InspectorEventStore, entry: SyncLo
       detail: {
         level: entry.level,
         ...(entry.preview === undefined ? {} : { debugPreview: entry.preview }),
+        ...(entry.debugError === undefined ? {} : { debugError: entry.debugError }),
         ...(entry.signatureValid === undefined ? {} : { signatureValid: entry.signatureValid })
       }
     },

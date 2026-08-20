@@ -1,10 +1,7 @@
 import { webcrypto } from 'node:crypto'
-import {
-  decodeEncryptedEnvelope,
-  encodeEncryptedEnvelopeSignatureInput,
-  type ProtocolEnvelope
-} from '@e2e-col/protocol'
+import { decodeEncryptedEnvelope, encodeEncryptedEnvelopeSignatureInput } from '@e2e-col/protocol'
 import type { WebSocket } from 'ws'
+import { DebugObserverError, type DebugObserverManager } from './debug-observer'
 import type { CollaborationGroupRegistry } from './group-registry'
 import type { AuthenticatedIdentity, IdentityRegistry } from './identity-registry'
 import type { ToySignalNetwork } from './network'
@@ -21,19 +18,20 @@ interface BoundConnection {
   readonly documentId: string
 }
 
-export type DebugEnvelopeDecryptor = (
-  payload: Uint8Array,
-  recipient: AuthenticatedIdentity
-) => Promise<ProtocolEnvelope>
-
 interface RoutedRecipient {
   readonly phoneNumber: string
+  readonly payload: Uint8Array
+}
+
+interface RoutedObserver {
+  readonly keyId: string
   readonly payload: Uint8Array
 }
 
 interface RoutedFanout {
   readonly messageId: string
   readonly recipients: readonly RoutedRecipient[]
+  readonly observer?: RoutedObserver
 }
 
 interface MessageMetadata {
@@ -61,12 +59,11 @@ export class EncryptedMessageRouter {
     private readonly network: ToySignalNetwork,
     private readonly now: () => number = Date.now,
     private readonly syncLog?: SyncEventLog,
-    private readonly debugDecryptor?: DebugEnvelopeDecryptor,
-    private debugDecrypt = false
+    private readonly debugObserver?: DebugObserverManager
   ) {}
 
   setDebugDecrypt(enabled: boolean): void {
-    this.debugDecrypt = enabled
+    this.debugObserver?.setEnabled(enabled)
   }
 
   private async inspectEnvelope(
@@ -99,40 +96,58 @@ export class EncryptedMessageRouter {
     } catch {
       // Opaque transport payloads remain routable even when diagnostics cannot decode metadata.
     }
+  }
 
-    if (!this.debugDecrypt || !this.debugDecryptor) return
+  private async inspectObserver(
+    binding: BoundConnection,
+    messageId: string,
+    observer: RoutedObserver | undefined
+  ): Promise<void> {
+    if (!observer || !this.debugObserver?.isEnabled()) return
     try {
-      const envelope = await this.debugDecryptor(new Uint8Array(payload), recipient)
-      if (
-        envelope.documentId !== binding.documentId ||
-        envelope.senderId !== binding.identity.userId
-      )
-        return
-      const valid = signatureValid ?? false
+      const envelope = await this.debugObserver.decrypt(observer.payload, {
+        observerKeyId: observer.keyId,
+        documentId: binding.documentId,
+        messageId,
+        senderId: binding.identity.userId,
+        senderPhoneNumber: binding.identity.phoneNumber,
+        senderIdentityKeyPublic: this.identities.identityKeyPublicByPhone(
+          binding.identity.phoneNumber
+        )
+      })
       this.syncLog?.append({
         level: 'application',
         direction: 'outbound',
         senderPhone: binding.identity.phoneNumber,
-        recipientPhone: recipient.phoneNumber,
         documentId: envelope.documentId,
         envelopeKind: envelope.kind,
         messageId: envelope.messageId,
-        signatureValid: valid
+        signatureValid: true
       })
       this.syncLog?.append({
         level: 'decrypted',
         direction: 'outbound',
         senderPhone: binding.identity.phoneNumber,
-        recipientPhone: recipient.phoneNumber,
         documentId: envelope.documentId,
         envelopeKind: envelope.kind,
         messageId: envelope.messageId,
         preview: new TextDecoder().decode(envelope.payload).slice(0, 256),
-        signatureValid: valid,
-        rawSizeBytes: payload.byteLength
+        signatureValid: true,
+        rawSizeBytes: observer.payload.byteLength
       })
-    } catch {
-      // Debug inspection is intentionally observational and cannot fail routing.
+    } catch (error) {
+      this.syncLog?.append({
+        level: 'decrypted',
+        direction: 'outbound',
+        senderPhone: binding.identity.phoneNumber,
+        documentId: binding.documentId,
+        messageId,
+        debugError: error instanceof DebugObserverError ? error.code : 'invalid-envelope',
+        ...(error instanceof DebugObserverError && error.code === 'invalid-signature'
+          ? { signatureValid: false }
+          : {}),
+        rawSizeBytes: observer.payload.byteLength
+      })
     }
   }
 
@@ -157,7 +172,7 @@ export class EncryptedMessageRouter {
   }
 
   getDebugDecrypt(): boolean {
-    return this.debugDecrypt
+    return this.debugObserver?.isEnabled() ?? false
   }
 
   attach(client: WebSocket): void {
@@ -278,6 +293,8 @@ export class EncryptedMessageRouter {
       return
     }
 
+    await this.inspectObserver(binding, fanout.messageId, fanout.observer)
+
     const recipientMetadata: MessageMetadata['recipients'][number][] = []
     for (const recipient of fanout.recipients) {
       const member = group.members.find((entry) => entry.phone_number === recipient.phoneNumber)
@@ -366,7 +383,20 @@ function decodeFanout(bytes: Uint8Array): RoutedFanout {
       throw new Error('fanout ciphertext payload has an invalid size')
     return { phoneNumber, payload }
   })
-  return { messageId, recipients }
+  const observer =
+    value.debug_observer === undefined
+      ? undefined
+      : (() => {
+          const record = asRecord(value.debug_observer)
+          const keyId = requiredString(record.key_id, 'debug_observer.key_id')
+          if (!/^[0-9a-f]{64}$/.test(keyId))
+            throw new Error('debug observer key id must be a lowercase SHA-256 hex digest')
+          const payload = decodeBase64(requiredString(record.payload, 'debug_observer.payload'))
+          if (payload.byteLength < 1 || payload.byteLength > MAX_ROUTED_CIPHERTEXT_BYTES)
+            throw new Error('debug observer payload has an invalid size')
+          return { keyId, payload }
+        })()
+  return { messageId, recipients, ...(observer === undefined ? {} : { observer }) }
 }
 
 function decodeBase64(value: string): Uint8Array {

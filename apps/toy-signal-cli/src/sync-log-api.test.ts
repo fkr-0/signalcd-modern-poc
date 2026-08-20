@@ -42,6 +42,36 @@ describe('toy sync-log API', () => {
       status: 'ok',
       debugDecrypt: true
     })
+
+    const capability = await fetch(`${baseUrl}/__toy__/v1/debug/observer-key`)
+    expect(capability.status).toBe(200)
+    const body = (await capability.json()) as Record<string, unknown>
+    expect(Object.keys(body).sort()).toEqual(['algorithm', 'key_id', 'public_key', 'version'])
+    expect(body.key_id).toMatch(/^[0-9a-f]{64}$/)
+    expect(Buffer.from(String(body.public_key), 'base64')).toHaveLength(32)
+    expect(JSON.stringify(body)).not.toMatch(/private|session.?token|secret/i)
+  })
+
+  it('hides the observer capability while disabled and rotates its public key across reset', async () => {
+    const { baseUrl } = await start({ debugDecrypt: false })
+    expect((await fetch(`${baseUrl}/__toy__/v1/debug/observer-key`)).status).toBe(404)
+    await fetch(`${baseUrl}/__toy__/v1/config`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ debugDecrypt: true })
+    })
+    const before = (await (await fetch(`${baseUrl}/__toy__/v1/debug/observer-key`)).json()) as {
+      key_id: string
+    }
+    await fetch(`${baseUrl}/__toy__/v1/reset`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}'
+    })
+    const after = (await (await fetch(`${baseUrl}/__toy__/v1/debug/observer-key`)).json()) as {
+      key_id: string
+    }
+    expect(after.key_id).not.toBe(before.key_id)
   })
 
   it('supports polling, complete JSON export, and an SSE event stream', async () => {

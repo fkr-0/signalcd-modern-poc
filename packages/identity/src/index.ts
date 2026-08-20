@@ -1,4 +1,5 @@
 export * from './client'
+export * from './debug-observer'
 export * from './encoding'
 export * from './encryption'
 export * from './provider'

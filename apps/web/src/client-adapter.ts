@@ -1,9 +1,15 @@
 import type { ClientIdentityAdapter } from '@e2e-col/client'
-import type { IdentityClient, UserIdentity } from '@e2e-col/identity'
+import {
+  type DebugObserverCapability,
+  encryptProtocolEnvelopeForDebugObserver,
+  type IdentityClient,
+  type UserIdentity
+} from '@e2e-col/identity'
 import {
   type DocumentParticipant,
   type DocumentRole,
   decodeEncryptedEnvelope,
+  encodeDebugObserverEnvelope,
   encodeEncryptedEnvelope,
   encodeEnvelope
 } from '@e2e-col/protocol'
@@ -16,6 +22,46 @@ export interface CollaborationGroupMemberView {
   readonly display_name: string
   readonly role: DocumentRole
   readonly joined_at?: number
+}
+
+async function createDebugObserverCopy(
+  baseUrl: string,
+  envelope: Parameters<typeof encryptProtocolEnvelopeForDebugObserver>[0],
+  identity: UserIdentity
+): Promise<{ keyId: string; payload: Uint8Array } | undefined> {
+  const capability = await fetchDebugObserverCapability(baseUrl)
+  if (!capability) return undefined
+  try {
+    const encrypted = await encryptProtocolEnvelopeForDebugObserver(envelope, identity, capability)
+    return { keyId: capability.keyId, payload: encodeDebugObserverEnvelope(encrypted) }
+  } catch {
+    // Debug observation must never make the recipient-encrypted application path unavailable.
+    return undefined
+  }
+}
+
+async function fetchDebugObserverCapability(
+  baseUrl: string
+): Promise<DebugObserverCapability | undefined> {
+  try {
+    const response = await fetch(
+      new URL('/__toy__/v1/debug/observer-key', ensureTrailingSlash(baseUrl)).toString(),
+      { headers: { accept: 'application/json' } }
+    )
+    if (!response.ok) return undefined
+    const value = (await response.json()) as unknown
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+    const record = value as Record<string, unknown>
+    if (
+      record.version !== 1 ||
+      typeof record.key_id !== 'string' ||
+      typeof record.public_key !== 'string'
+    )
+      return undefined
+    return { keyId: record.key_id, publicKey: record.public_key }
+  } catch {
+    return undefined
+  }
 }
 
 function envelopeMetadata(envelope: {
@@ -217,13 +263,15 @@ export function createBrowserIdentityAdapter(
           }
         })
         const fanoutStarted = performance.now()
+        const observer = await createDebugObserverCopy(options.baseUrl, envelope, options.identity)
         const fanout = encodeMockSignalFanoutFrame({
           version: 1,
           messageId: envelope.messageId,
           recipients: encrypted.map(({ recipient, bytes }) => ({
             phoneNumber: recipient.phone_number,
             payload: bytes
-          }))
+          })),
+          ...(observer === undefined ? {} : { observer })
         })
         options.inspector?.append({
           direction: 'outbound',
@@ -389,4 +437,8 @@ async function requestJson<T>(url: string, init: RequestInit): Promise<T> {
     throw new Error(`collaboration group request failed (${response.status})${detail}`)
   }
   return (await response.json()) as T
+}
+
+function ensureTrailingSlash(value: string): string {
+  return value.endsWith('/') ? value : `${value}/`
 }

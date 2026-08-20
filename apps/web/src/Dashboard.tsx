@@ -6,6 +6,11 @@ import {
   type UserIdentity
 } from '@e2e-col/identity'
 import type { DocumentAccessState } from '@e2e-col/protocol'
+import type {
+  MockSignalGroupMember,
+  ObservableCollaborativeTransport,
+  TransportMetrics
+} from '@e2e-col/transport'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { type CollaborationGroupView, getGroup } from './client-adapter'
 import {
@@ -21,7 +26,8 @@ import {
 import './dashboard.css'
 
 const GUIDED_MODE_KEY = 'e2e-col-guided-mode'
-const SIGNAL_CD_URL = 'https://github.com/spring-epfl/signal-collaborative-documents'
+const SIGNAL_CD_PAPER_URL =
+  'https://www.usenix.org/system/files/conference/usenixsecurity26/sec26_prepub_knabenhans.pdf'
 const SIGNAL_SPEC_URL = 'https://signal.org/docs/'
 
 interface DashboardProps {
@@ -32,9 +38,29 @@ interface DashboardProps {
   readonly access?: DocumentAccessState
   readonly status?: SessionStatus
   readonly transportLabel: string
+  readonly transport?: ObservableCollaborativeTransport
   readonly inspector: InspectorEventStore
   readonly syncLogClient: SyncLogClient
   readonly onShowWorkspace: () => void
+}
+
+const paperReferences: Record<
+  PipelineOperation,
+  { readonly label: string; readonly href: string }
+> = {
+  crdt_change: { label: 'Paper §2.2', href: `${SIGNAL_CD_PAPER_URL}#page=2` },
+  envelope: { label: 'Paper §5.1', href: `${SIGNAL_CD_PAPER_URL}#page=7` },
+  sign: { label: 'Paper §6.2', href: `${SIGNAL_CD_PAPER_URL}#page=9` },
+  encrypt: { label: 'Paper §6.2', href: `${SIGNAL_CD_PAPER_URL}#page=9` },
+  fanout_frame: { label: 'Paper §6.2', href: `${SIGNAL_CD_PAPER_URL}#page=9` },
+  transport_send: { label: 'Paper §6.3', href: `${SIGNAL_CD_PAPER_URL}#page=10` },
+  transport_receive: { label: 'Paper §6.3', href: `${SIGNAL_CD_PAPER_URL}#page=10` },
+  fanout_decode: { label: 'Paper §6.3', href: `${SIGNAL_CD_PAPER_URL}#page=10` },
+  decrypt: { label: 'Paper §6.2', href: `${SIGNAL_CD_PAPER_URL}#page=9` },
+  verify_signature: { label: 'Paper §6.2', href: `${SIGNAL_CD_PAPER_URL}#page=9` },
+  envelope_decode: { label: 'Paper §5.1', href: `${SIGNAL_CD_PAPER_URL}#page=7` },
+  dedup: { label: 'Paper §5.1', href: `${SIGNAL_CD_PAPER_URL}#page=7` },
+  crdt_apply: { label: 'Paper §2.2', href: `${SIGNAL_CD_PAPER_URL}#page=2` }
 }
 
 interface IdentityReadout {
@@ -210,7 +236,8 @@ export function Dashboard(props: DashboardProps) {
   }, [props.identity.sessionToken, props.identityServerUrl])
 
   const events = props.inspector.events()
-  const metrics = props.inspector.getTransportMetrics()
+  const metrics = props.transport?.getMetrics() ?? props.inspector.getTransportMetrics()
+  const transportMembers = readMockSignalGroupMembers(props.transport)
 
   return (
     <main className="dashboard-shell">
@@ -247,6 +274,8 @@ export function Dashboard(props: DashboardProps) {
           />
           <GroupPanel
             group={group}
+            groupId={props.groupId}
+            transportMembers={transportMembers}
             access={props.access}
             events={events}
             fallbackDocumentId={props.documentId}
@@ -278,6 +307,8 @@ function IdentityPanel(props: {
     <Panel title="Identity" subtitle="browser-owned">
       <Readout label="user_id" value={props.identity.userId} />
       <Readout label="phone_number" value={props.identity.phoneNumber} />
+      <Readout label="display_name" value={props.identity.displayName} />
+      <Readout label="created_at" value={new Date(props.identity.createdAt).toISOString()} />
       <FingerprintReadout
         label="identity_key_fingerprint"
         fingerprint={props.readout?.identityFingerprint}
@@ -364,22 +395,32 @@ function FingerprintReadout(props: {
 
 function GroupPanel(props: {
   readonly group?: CollaborationGroupView | undefined
+  readonly groupId?: string | undefined
+  readonly transportMembers?: readonly MockSignalGroupMember[] | undefined
   readonly access?: DocumentAccessState | undefined
   readonly events: readonly InspectorEvent[]
   readonly fallbackDocumentId: string
 }) {
   const group = props.group
+  const members =
+    props.transportMembers && props.transportMembers.length > 0
+      ? props.transportMembers.map((member) => ({
+          user_id: member.userId,
+          phone_number: member.phoneNumber,
+          role: member.role
+        }))
+      : (group?.members ?? [])
   return (
     <Panel
       title="Group"
-      subtitle={group ? `${group.members.length} members` : 'not bound / unavailable'}
+      subtitle={members.length > 0 ? `${members.length} members` : 'unavailable'}
     >
-      <Readout label="group_id" value={group?.group_id ?? '—'} />
+      <Readout label="group_id" value={group?.group_id ?? props.groupId ?? '—'} />
       <Readout label="document_id" value={group?.document_id ?? props.fallbackDocumentId} />
       <Readout label="self_role" value={props.access?.selfRole ?? '—'} />
       <Readout
         label="member_count"
-        value={String(group?.members.length ?? props.access?.participants.length ?? 0)}
+        value={String(members.length || props.access?.participants.length || 0)}
       />
       <div className="group-table-wrap">
         <table className="compact-table">
@@ -393,7 +434,7 @@ function GroupPanel(props: {
             </tr>
           </thead>
           <tbody>
-            {group?.members.map((member) => {
+            {members.map((member) => {
               const accessMember = props.access?.participants.find(
                 (participant) => participant.participantId === member.user_id
               )
@@ -409,7 +450,7 @@ function GroupPanel(props: {
                   <td>{lastSeen === undefined ? '—' : formatTime(lastSeen)}</td>
                 </tr>
               )
-            }) ?? null}
+            })}
           </tbody>
         </table>
       </div>
@@ -419,7 +460,7 @@ function GroupPanel(props: {
 
 function TransportPanel(props: {
   readonly status?: SessionStatus | undefined
-  readonly metrics?: ReturnType<InspectorEventStore['getTransportMetrics']>
+  readonly metrics?: TransportMetrics | undefined
 }) {
   const metrics = props.metrics
   return (
@@ -523,12 +564,18 @@ function PipelineLane(props: {
                   <div className="pipeline-annotation">
                     <span>{annotations[operation]}</span>
                     <a
-                      href={operation === 'encrypt' ? SIGNAL_SPEC_URL : SIGNAL_CD_URL}
+                      className="paper-ref-badge"
+                      href={paperReferences[operation].href}
                       target="_blank"
                       rel="noreferrer"
                     >
-                      {operation === 'encrypt' ? 'Signal spec' : 'SignalCD'}
+                      {paperReferences[operation].label}
                     </a>
+                    {operation === 'encrypt' ? (
+                      <a href={SIGNAL_SPEC_URL} target="_blank" rel="noreferrer">
+                        Signal spec
+                      </a>
+                    ) : null}
                   </div>
                 ) : null}
               </details>
@@ -796,4 +843,14 @@ function formatTime(timestamp: number): string {
 
 function formatOptionalTime(timestamp: number | undefined): string {
   return timestamp === undefined ? '—' : new Date(timestamp).toISOString()
+}
+
+function readMockSignalGroupMembers(
+  transport: ObservableCollaborativeTransport | undefined
+): readonly MockSignalGroupMember[] | undefined {
+  if (!transport || !('getGroupMembers' in transport)) return undefined
+  const candidate = transport as ObservableCollaborativeTransport & {
+    getGroupMembers?: () => readonly MockSignalGroupMember[]
+  }
+  return typeof candidate.getGroupMembers === 'function' ? candidate.getGroupMembers() : undefined
 }

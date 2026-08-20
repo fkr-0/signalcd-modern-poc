@@ -8,6 +8,9 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
+- Toy-only P5 observer encryption for plaintext inspection: explicit debug mode
+  exposes a rotating X25519 observer public key/id and browsers attach a separate
+  HKDF-SHA-256/AES-256-GCM observer copy signed by the sender Ed25519 identity.
 - Durable client checkpoint recovery: transport recovery signals now trigger a
   persisted full-document snapshot that is replayable across reconnects, and
   `DocumentSession.publishSnapshot()` exposes the same explicit recovery primitive.
@@ -24,6 +27,9 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
+- Debug inspection no longer depends on browser identity key export. Observer
+  ciphertext is bound to its key id and document/message/sender metadata, never
+  routed to participants, and malformed/tampered/stale copies are diagnostic-only.
 - Client outbound records now retain their protocol kind so snapshot compaction can
   remove only CRDT change/snapshot history while preserving membership, archive, and
   delete transitions that are not represented by document snapshots.
@@ -37,6 +43,14 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - IndexedDB multi-store commits now explicitly abort on synchronous write-setup
   failures, preventing a snapshot from committing without its matching outbound
   record. Recovery snapshots also respect reader/archive/delete write restrictions.
+
+### Security
+
+- Browser identity/prekey private keys remain non-exportable and browser-local. The
+  separate observer secret key stays inside the loopback toy daemon, rotates on
+  reset or disable/enable, and is not returned through state/config/log/export APIs.
+- Debug decrypt remains off by default; without an active observer capability,
+  fanout remains recipient-ciphertext-only and decrypted previews are absent.
 
 ## [0.0.2] - 2026-08-20
 
