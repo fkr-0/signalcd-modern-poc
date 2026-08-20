@@ -6,6 +6,13 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Added
+
+- Standalone `@e2e-col/toy-signal-cli` daemon implementing the e2e-col signal-cli
+  compatibility profile over real localhost HTTP JSON-RPC/SSE, including
+  multi-account routing, group fan-out, sender sync echoes, deterministic fault
+  controls, explicit contract documentation, and two-sidecar end-to-end tests.
+
 ## [0.0.1] - 2026-08-19
 
 ### Added

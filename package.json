@@ -22,6 +22,8 @@
     "test:e2e:list": "playwright test --list",
     "test:storage": "vitest run packages/storage",
     "test:sidecar": "vitest run apps/sidecar",
+    "test:toy-signal-cli": "vitest run apps/toy-signal-cli",
+    "demo:signal": "npm run dev -w @e2e-col/toy-signal-cli",
     "version:check": "node scripts/check-version.js",
     "check": "npm run version:check && npm run typecheck && npm run lint && npm run format:check && npm run test && npm run build",
     "check:release": "npm run check && npm run test:e2e"
