@@ -12,6 +12,29 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
   compatibility profile over real localhost HTTP JSON-RPC/SSE, including
   multi-account routing, group fan-out, sender sync echoes, deterministic fault
   controls, explicit contract documentation, and two-sidecar end-to-end tests.
+- New `@e2e-col/identity` browser identity layer with Ed25519 identity signing
+  keys, X25519 signed/one-time prekeys, IndexedDB-backed CryptoKey persistence,
+  remote-key verification primitives, and deterministic 60-digit safety numbers.
+- Toy identity REST API for registration, authenticated session restoration,
+  public prekey lookup/consumption, replenishment, and redacted inspectable state.
+- Browser end-to-end coverage for one identity and one editor session per browser
+  profile, durable identity/document reload, and isolation between browser contexts.
+
+### Changed
+
+- Replaced the two-replica same-page web demo with a single-client workspace shell
+  so each browser profile models one real client and backend transport can be
+  exchanged independently of editor UI state.
+- Playwright now launches the toy daemon alongside the web preview for browser
+  identity integration tests while retaining Chromium, Firefox, and WebKit projects.
+
+### Security
+
+- Browser private identity and prekey keys are generated non-exportable and are
+  never sent to the toy backend; the server validates signed public prekeys and
+  stores only public material plus opaque bearer sessions.
+- Toy browser APIs accept only loopback HTTP(S) origins, and inspectable toy state
+  omits session tokens and private key material.
 
 ## [0.0.1] - 2026-08-19
 

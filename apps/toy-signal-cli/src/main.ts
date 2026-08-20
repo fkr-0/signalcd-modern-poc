@@ -18,6 +18,7 @@ console.log(`toy signal-cli listening on ${address.baseUrl}`)
 console.log(`demo accounts: ${DEFAULT_TOY_ACCOUNT_A}, ${DEFAULT_TOY_ACCOUNT_B}`)
 console.log(`demo group: ${DEFAULT_TOY_GROUP_ID}`)
 console.log('contract: /__toy__/v1/contract')
+console.log('mock identity: /api/v1/identity/register, /session, /keys/:phone_number')
 console.log('test controls: /__toy__/v1/state, /reset, /faults, /inject')
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {

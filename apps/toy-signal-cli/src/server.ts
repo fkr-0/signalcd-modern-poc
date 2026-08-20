@@ -5,6 +5,7 @@ import {
   type JsonRpcId,
   type JsonRpcRequest,
   type JsonRpcResponse,
+  MOCK_IDENTITY_ENDPOINTS,
   SIGNAL_CLI_HTTP_ENDPOINTS,
   SUPPORTED_RPC_METHODS,
   TOY_CONTROL_ENDPOINTS,
@@ -13,6 +14,11 @@ import {
   type ToyInjectRequest,
   type ToySignalConfig
 } from './contract'
+import {
+  IdentityApiError,
+  type IdentityRegistrationRequest,
+  IdentityRegistry
+} from './identity-registry'
 import { ToyRpcError, ToySignalNetwork } from './network'
 
 const MAX_BODY_BYTES = 1024 * 1024
@@ -27,6 +33,7 @@ export interface ToySignalCliServerOptions {
 
 export class ToySignalCliServer {
   readonly network: ToySignalNetwork
+  readonly identities: IdentityRegistry
   private readonly host: string
   private readonly port: number
   private readonly fixedAccount: string | undefined
@@ -38,6 +45,10 @@ export class ToySignalCliServer {
     this.port = options.port ?? 18080
     this.fixedAccount = options.fixedAccount
     this.network = new ToySignalNetwork(options.config ?? DEFAULT_TOY_SIGNAL_CONFIG, options.now)
+    this.identities = new IdentityRegistry(
+      options.now,
+      (options.config ?? DEFAULT_TOY_SIGNAL_CONFIG).accounts.map((account) => account.account)
+    )
   }
 
   async start(): Promise<{ host: string; port: number; baseUrl: string }> {
@@ -67,6 +78,14 @@ export class ToySignalCliServer {
   private async route(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
       const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`)
+      if (!applyCors(request, response)) {
+        json(response, 403, { error: 'cross-origin access is limited to loopback origins' })
+        return
+      }
+      if (request.method === 'OPTIONS') {
+        response.writeHead(204).end()
+        return
+      }
       if (request.method === 'GET' && url.pathname === SIGNAL_CLI_HTTP_ENDPOINTS.check) {
         response.writeHead(200, { 'content-type': 'application/json' })
         response.end(JSON.stringify({ ok: true, toy: true, contractVersion: 1 }))
@@ -85,14 +104,16 @@ export class ToySignalCliServer {
         return
       }
       if (request.method === 'GET' && url.pathname === TOY_CONTROL_ENDPOINTS.state) {
-        json(response, 200, this.network.view())
+        json(response, 200, { ...this.network.view(), identity: this.identities.view() })
         return
       }
       if (request.method === 'POST' && url.pathname === TOY_CONTROL_ENDPOINTS.reset) {
         const value = await readJson(request)
         const config = asOptionalConfig(value)
-        this.network.reset(config ?? DEFAULT_TOY_SIGNAL_CONFIG)
-        json(response, 200, this.network.view())
+        const effectiveConfig = config ?? DEFAULT_TOY_SIGNAL_CONFIG
+        this.network.reset(effectiveConfig)
+        this.identities.reset(effectiveConfig.accounts.map((account) => account.account))
+        json(response, 200, { ...this.network.view(), identity: this.identities.view() })
         return
       }
       if (request.method === 'POST' && url.pathname === TOY_CONTROL_ENDPOINTS.faults) {
@@ -106,13 +127,44 @@ export class ToySignalCliServer {
         json(response, 200, { ok: true })
         return
       }
+      if (request.method === 'POST' && url.pathname === MOCK_IDENTITY_ENDPOINTS.register) {
+        const value = (await readJson(request)) as IdentityRegistrationRequest
+        json(response, 201, await this.identities.register(value))
+        return
+      }
+      if (request.method === 'GET' && url.pathname === MOCK_IDENTITY_ENDPOINTS.session) {
+        json(response, 200, this.identities.session(request.headers.authorization))
+        return
+      }
+      if (request.method === 'POST' && url.pathname === MOCK_IDENTITY_ENDPOINTS.replenish) {
+        const value = await readJson(request)
+        const record = isRecord(value) ? value : {}
+        json(
+          response,
+          200,
+          this.identities.replenish(
+            request.headers.authorization,
+            Array.isArray(record.one_time_prekeys) ? (record.one_time_prekeys as string[]) : []
+          )
+        )
+        return
+      }
+      if (request.method === 'GET' && url.pathname.startsWith(MOCK_IDENTITY_ENDPOINTS.keyPrefix)) {
+        const phoneNumber = decodeURIComponent(
+          url.pathname.slice(MOCK_IDENTITY_ENDPOINTS.keyPrefix.length)
+        )
+        json(response, 200, this.identities.lookup(phoneNumber, request.headers.authorization))
+        return
+      }
       response.writeHead(404).end()
     } catch (error) {
       if (response.headersSent) {
         response.end()
         return
       }
-      json(response, 400, { error: error instanceof Error ? error.message : 'bad request' })
+      json(response, error instanceof IdentityApiError ? error.status : 400, {
+        error: error instanceof Error ? error.message : 'bad request'
+      })
     }
   }
 
@@ -256,5 +308,23 @@ function isLoopbackHostname(hostname: string): boolean {
 export const toySignalCliContract = {
   endpoints: SIGNAL_CLI_HTTP_ENDPOINTS,
   controls: TOY_CONTROL_ENDPOINTS,
+  identity: MOCK_IDENTITY_ENDPOINTS,
   methods: SUPPORTED_RPC_METHODS
 } as const
+
+function applyCors(request: IncomingMessage, response: ServerResponse): boolean {
+  const origin = request.headers.origin
+  if (!origin) return true
+  try {
+    const parsed = new URL(origin)
+    if (!['http:', 'https:'].includes(parsed.protocol) || !isLoopbackHostname(parsed.hostname))
+      return false
+  } catch {
+    return false
+  }
+  response.setHeader('access-control-allow-origin', origin)
+  response.setHeader('vary', 'origin')
+  response.setHeader('access-control-allow-headers', 'authorization, content-type')
+  response.setHeader('access-control-allow-methods', 'GET, POST, DELETE, OPTIONS')
+  return true
+}

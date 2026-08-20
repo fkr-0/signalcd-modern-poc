@@ -14,6 +14,13 @@ export const TOY_CONTROL_ENDPOINTS = {
   inject: '/__toy__/v1/inject'
 } as const
 
+export const MOCK_IDENTITY_ENDPOINTS = {
+  register: '/api/v1/identity/register',
+  session: '/api/v1/identity/session',
+  keyPrefix: '/api/v1/identity/keys/',
+  replenish: '/api/v1/identity/keys/replenish'
+} as const
+
 /**
  * Compatibility profile implemented semantically by the toy daemon.
  * Unknown upstream signal-cli commands fail with JSON-RPC -32601 rather than
@@ -178,6 +185,13 @@ export const TOY_SIGNAL_CLI_API_SPEC = {
     message: 'Method not found'
   },
   toyControls: TOY_CONTROL_ENDPOINTS,
+  mockIdentity: {
+    endpoints: MOCK_IDENTITY_ENDPOINTS,
+    privateKeys: 'browser-only',
+    signingKey: 'Ed25519',
+    prekeys: 'X25519',
+    sessionTokens: 'opaque bearer'
+  },
   fidelity: {
     localDaemonApi: 'semantic',
     signalCryptography: 'not-implemented',

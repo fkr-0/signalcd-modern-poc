@@ -25,10 +25,17 @@ export default defineConfig({
       use: { ...devices['Desktop Safari'] }
     }
   ],
-  webServer: {
-    command:
-      'pnpm --filter @e2e-col/web build && pnpm --filter @e2e-col/web exec vite preview --host 127.0.0.1 --port 4173',
-    url: 'http://127.0.0.1:4173',
-    reuseExistingServer: !process.env.CI
-  }
+  webServer: [
+    {
+      command: 'TOY_SIGNAL_CLI_PORT=18080 pnpm --filter @e2e-col/toy-signal-cli dev',
+      url: 'http://127.0.0.1:18080/api/v1/check',
+      reuseExistingServer: !process.env.CI
+    },
+    {
+      command:
+        'pnpm --filter @e2e-col/web build && pnpm --filter @e2e-col/web exec vite preview --host 127.0.0.1 --port 4173',
+      url: 'http://127.0.0.1:4173',
+      reuseExistingServer: !process.env.CI
+    }
+  ]
 })

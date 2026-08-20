@@ -1,41 +1,54 @@
-import { expect, test } from '@playwright/test'
+import { expect, type Page, test } from '@playwright/test'
 
-test('renders two collaborative replicas', async ({ page }) => {
+async function register(page: Page, name: string) {
   await page.goto('/')
-  await expect(
-    page.getByRole('heading', { name: 'Encrypted transport, CRDT editor.' })
-  ).toBeVisible()
-  await expect(page.getByRole('textbox')).toHaveCount(2)
+  await expect(page.getByRole('heading', { name: 'Create your local identity.' })).toBeVisible()
+  await page.getByLabel('Display name').fill(name)
+  await page.getByRole('button', { name: 'Create identity' }).click()
+  await expect(page.getByRole('heading', { name: 'Your encrypted workspace.' })).toBeVisible()
+  await expect(page.locator('textarea')).toHaveCount(1)
+  await expect(page.getByRole('status')).toContainText('Ready')
+}
+
+test('registers one browser-owned identity and exposes one editor session', async ({ page }) => {
+  await register(page, 'Ada')
+
+  await expect(page.getByLabel('Current identity')).toContainText('Ada')
+  await expect(page.getByTestId('identity-phone')).toHaveText(/^\+1555000\d{4}$/)
+  await expect(page.getByText('Browser-owned keys')).toBeVisible()
+  await expect(page.getByText('Local-first persistence')).toBeVisible()
 })
 
-test('synchronizes edits between independent browser replicas', async ({ page }) => {
-  await page.goto('/')
-  const editors = page.getByRole('textbox')
-  const left = editors.nth(0)
-  const right = editors.nth(1)
+test('restores the same identity and local document after browser reload', async ({ page }) => {
+  await register(page, 'Grace')
+  const phone = await page.getByTestId('identity-phone').textContent()
+  const editor = page.locator('textarea')
+  await editor.fill('durable local draft')
+  await expect(editor).toHaveValue('durable local draft')
 
-  await expect(page.getByText('connected', { exact: true })).toHaveCount(2)
-  await left.fill('private collaboration')
-  await expect(right).toHaveValue('private collaboration')
+  await page.reload()
 
-  await right.fill('private collaborative state')
-  await expect(left).toHaveValue('private collaborative state')
+  await expect(page.getByRole('heading', { name: 'Your encrypted workspace.' })).toBeVisible()
+  await expect(page.getByTestId('identity-phone')).toHaveText(phone ?? '')
+  await expect(page.locator('textarea')).toHaveValue('durable local draft')
 })
 
-test('isolates separate browser contexts before a shared sidecar is connected', async ({
-  browser
-}) => {
+test('keeps separate browser contexts as separate clients', async ({ browser }) => {
   const firstContext = await browser.newContext()
   const secondContext = await browser.newContext()
   const firstPage = await firstContext.newPage()
   const secondPage = await secondContext.newPage()
 
   try {
-    await Promise.all([firstPage.goto('/'), secondPage.goto('/')])
-    await firstPage.getByRole('textbox').first().fill('local session one')
+    await register(firstPage, 'Alice')
+    await register(secondPage, 'Bob')
+    const firstPhone = await firstPage.getByTestId('identity-phone').textContent()
+    const secondPhone = await secondPage.getByTestId('identity-phone').textContent()
+    expect(firstPhone).not.toBe(secondPhone)
 
-    await expect(firstPage.getByRole('textbox').nth(1)).toHaveValue('local session one')
-    await expect(secondPage.getByRole('textbox').first()).toHaveValue('')
+    await firstPage.locator('textarea').fill('client one only')
+    await expect(firstPage.locator('textarea')).toHaveValue('client one only')
+    await expect(secondPage.locator('textarea')).toHaveValue('')
   } finally {
     await Promise.all([firstContext.close(), secondContext.close()])
   }

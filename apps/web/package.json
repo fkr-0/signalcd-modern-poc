@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@e2e-col/core": "workspace:*",
+    "@e2e-col/identity": "workspace:*",
     "@e2e-col/protocol": "workspace:*",
     "@e2e-col/storage": "workspace:*",
     "@e2e-col/transport": "workspace:*",
