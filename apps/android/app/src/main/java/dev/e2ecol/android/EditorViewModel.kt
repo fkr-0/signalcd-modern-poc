@@ -22,7 +22,7 @@ class EditorViewModel : ViewModel() {
                 mutableState.update {
                     it.copy(
                         documentId = request.documentId.toString(),
-                        groupId = request.groupId?.toString(),
+                        groupId = request.groupId,
                         inviter = request.inviter,
                         message = "Join link validated locally",
                     )

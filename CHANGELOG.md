@@ -8,6 +8,14 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
+- Android CI workflows: dedicated `android-build.yml` (debug/release APK
+  assembly with artifact upload) and `android-test.yml` (unit tests across
+  all six core modules plus Android lint) GitHub Actions workflows.
+- Android core:protocol tests for chunk encoding, EnvelopeKind.fromCode edge
+  cases, validation errors (empty senderId, invalid UUID, negative timestamps),
+  and payload boundary conditions.
+- Android core:sidecar contract test verifying SidecarSessionTransportAdapter
+  implements the SessionTransport interface.
 - Toy-only P5 observer encryption for plaintext inspection: explicit debug mode
   exposes a rotating X25519 observer public key/id and browsers attach a separate
   HKDF-SHA-256/AES-256-GCM observer copy signed by the sender Ed25519 identity.

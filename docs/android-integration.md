@@ -225,7 +225,12 @@ platforms;android-36
 build-tools;36.0.0
 ```
 
-The Android checks are intentionally separate from the pnpm TypeScript `check` gate until Android CI has an explicit JDK/SDK image. Once CI is provisioned, both gates should be required for changes under shared protocol/contract fixtures.
+Dedicated GitHub Actions workflows run Android CI independently:
+
+- `.github/workflows/android-build.yml` — assembles debug APK on every push/PR; assembles release APK on version tags; uploads APK artifacts.
+- `.github/workflows/android-test.yml` — runs all core module unit tests (model, protocol, sidecar, identity, storage, session) and Android lint on push/PR.
+
+The main `ci.yml` workflow also includes an Android job that runs `android:check` and `android:assemble` as part of the release gate. Both gates should be required for changes under shared protocol/contract fixtures.
 
 ## 11. Milestones
 
