@@ -80,6 +80,7 @@ export function Dashboard(props: DashboardProps) {
   const [group, setGroup] = useState<CollaborationGroupView>()
   const [identityReadout, setIdentityReadout] = useState<IdentityReadout>()
   const [peers, setPeers] = useState<readonly PeerReadout[]>([])
+  const [prekeyPoolCount, setPrekeyPoolCount] = useState<number>()
   const [sessionTokenStatus, setSessionTokenStatus] = useState<
     'valid' | 'expired' | 'missing' | 'unavailable'
   >(props.identity.sessionToken ? 'valid' : 'missing')
@@ -190,11 +191,15 @@ export function Dashboard(props: DashboardProps) {
     void fetch(`${props.identityServerUrl}/api/v1/identity/session`, {
       headers: { authorization: `Bearer ${props.identity.sessionToken}` }
     })
-      .then((response) => {
+      .then(async (response) => {
         if (!active) return
         setSessionTokenStatus(
           response.ok ? 'valid' : response.status === 401 ? 'expired' : 'unavailable'
         )
+        if (response.ok) {
+          const value = (await response.json()) as { prekey_count?: unknown }
+          if (typeof value.prekey_count === 'number') setPrekeyPoolCount(value.prekey_count)
+        }
       })
       .catch(() => {
         if (active) setSessionTokenStatus('unavailable')
@@ -236,6 +241,7 @@ export function Dashboard(props: DashboardProps) {
             identity={props.identity}
             readout={identityReadout}
             peers={peers}
+            prekeyPoolCount={prekeyPoolCount}
             sessionTokenStatus={sessionTokenStatus}
             guided={guided}
           />
@@ -264,6 +270,7 @@ function IdentityPanel(props: {
   readonly identity: UserIdentity
   readonly readout?: IdentityReadout | undefined
   readonly peers: readonly PeerReadout[]
+  readonly prekeyPoolCount?: number | undefined
   readonly sessionTokenStatus: string
   readonly guided: boolean
 }) {
@@ -298,7 +305,14 @@ function IdentityPanel(props: {
           </p>
         </details>
       ) : null}
-      <Readout label="one_time_prekey_pool" value={String(props.identity.oneTimePrekeys.length)} />
+      <Readout
+        label="one_time_prekey_pool"
+        value={
+          props.prekeyPoolCount === undefined
+            ? `${props.identity.oneTimePrekeys.length} retained locally`
+            : String(props.prekeyPoolCount)
+        }
+      />
       <Readout label="session_token_status" value={props.sessionTokenStatus} />
       <div className="dashboard-subsection">
         <span className="dashboard-label">known_peers</span>
@@ -537,7 +551,7 @@ function TrafficLog({ events }: { readonly events: readonly InspectorEvent[] }) 
   const [text, setText] = useState('')
   const [expanded, setExpanded] = useState<string>()
   const [hovered, setHovered] = useState(false)
-  const scroller = useRef<HTMLDivElement>(null)
+  const scroller = useRef<HTMLElement>(null)
 
   const operationOptions = useMemo(
     () => [...new Set(events.map((event) => event.operation))].sort(),

@@ -234,6 +234,7 @@ function sessionResponse(record: IdentityRecord): Record<string, unknown> {
     user_id: record.userId,
     phone_number: record.phoneNumber,
     display_name: record.displayName,
+    prekey_count: record.oneTimePrekeys.length,
     created_at: record.createdAt
   }
 }

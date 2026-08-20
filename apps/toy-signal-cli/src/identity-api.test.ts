@@ -34,7 +34,9 @@ describe('mock identity HTTP API', () => {
       headers: { authorization: `Bearer ${token}` }
     })
     expect(sessionResponse.status).toBe(200)
-    expect(asRecord(await sessionResponse.json()).user_id).toBe(registered.user_id)
+    const session = asRecord(await sessionResponse.json())
+    expect(session.user_id).toBe(registered.user_id)
+    expect(session.prekey_count).toBe(2)
 
     const first = asRecord(await jsonFetch(`${baseUrl}/api/v1/identity/keys/${phone}`, token))
     expect(first.one_time_prekey).toBe(registration.one_time_prekeys[0])
