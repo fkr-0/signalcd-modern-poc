@@ -4,17 +4,13 @@
   "private": true,
   "description": "Modern E2EE collaborative-document implementation inspired by SignalCD.",
   "type": "module",
-  "workspaces": [
-    "apps/*",
-    "packages/*"
-  ],
   "scripts": {
-    "dev": "npm run dev -w @e2e-col/web",
-    "build": "npm run build --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present",
-    "lint": "eslint .",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "dev": "pnpm --filter @e2e-col/web dev",
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "format:check": "biome check .",
     "test": "vitest run",
     "test:core": "vitest run packages/core packages/protocol packages/transport packages/testing",
     "test:watch": "vitest",
@@ -23,21 +19,17 @@
     "test:storage": "vitest run packages/storage",
     "test:sidecar": "vitest run apps/sidecar",
     "test:toy-signal-cli": "vitest run apps/toy-signal-cli",
-    "demo:signal": "npm run dev -w @e2e-col/toy-signal-cli",
+    "demo:signal": "pnpm --filter @e2e-col/toy-signal-cli dev",
     "version:check": "node scripts/check-version.js",
-    "check": "npm run version:check && npm run typecheck && npm run lint && npm run format:check && npm run test && npm run build",
-    "check:release": "npm run check && npm run test:e2e"
+    "check": "pnpm run version:check && pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run test && pnpm run build",
+    "check:release": "pnpm run check && pnpm run test:e2e"
   },
   "license": "MIT",
   "devDependencies": {
-    "@eslint/js": "^9.34.0",
+    "@biomejs/biome": "^2.0.0",
     "@playwright/test": "^1.55.0",
-    "eslint": "^9.34.0",
     "fake-indexeddb": "^6.2.2",
-    "globals": "^16.3.0",
-    "prettier": "^3.6.2",
     "typescript": "^5.9.2",
-    "typescript-eslint": "^8.40.0",
     "vitest": "^3.2.4"
   }
 }

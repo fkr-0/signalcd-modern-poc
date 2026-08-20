@@ -13,3 +13,5 @@ test-results/
 .nyc_output/
 .DS_Store
 .ws-bridge/
+pnpm-lock.yaml
+pnpm-debug.log

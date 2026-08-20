@@ -9,7 +9,7 @@
     "test": "vitest run --root ../.. apps/sidecar/src"
   },
   "dependencies": {
-    "@e2e-col/protocol": "0.0.1",
+    "@e2e-col/protocol": "workspace:*",
     "ws": "^8.18.3"
   },
   "devDependencies": {
