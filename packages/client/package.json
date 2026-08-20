@@ -1,0 +1,19 @@
+{
+  "name": "@e2e-col/client",
+  "version": "0.0.2",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --root ../.. packages/client/src"
+  },
+  "dependencies": {
+    "@e2e-col/core": "workspace:*",
+    "@e2e-col/protocol": "workspace:*",
+    "@e2e-col/storage": "workspace:*",
+    "@e2e-col/transport": "workspace:*"
+  }
+}

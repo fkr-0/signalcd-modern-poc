@@ -4,10 +4,12 @@ export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: true,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  // The toy Signal fault injector is process-global. Serial browser workers keep
+  // fault schedules deterministic while each test still uses isolated contexts.
+  workers: 1,
   reporter: 'list',
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL: 'http://127.0.0.1:4174',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure'
   },
@@ -33,8 +35,8 @@ export default defineConfig({
     },
     {
       command:
-        'pnpm --filter @e2e-col/web build && pnpm --filter @e2e-col/web exec vite preview --host 127.0.0.1 --port 4173',
-      url: 'http://127.0.0.1:4173',
+        'pnpm --filter @e2e-col/web build && pnpm --filter @e2e-col/web exec vite preview --host 127.0.0.1 --port 4174',
+      url: 'http://127.0.0.1:4174',
       reuseExistingServer: !process.env.CI
     }
   ]

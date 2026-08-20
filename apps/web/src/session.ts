@@ -1,9 +1,25 @@
 import { CollaborativeDocument } from '@e2e-col/core'
-import { createEnvelope, DedupCache, decodeEnvelope, encodeEnvelope } from '@e2e-col/protocol'
+import {
+  createEnvelope,
+  DedupCache,
+  decodeEnvelope,
+  encodeEnvelope,
+  type ProtocolEnvelope
+} from '@e2e-col/protocol'
 import { IndexedDbCollaborativeStorage } from '@e2e-col/storage'
 import type { CollaborativeTransport } from '@e2e-col/transport'
 
 type Subscriber = (text: string) => void
+
+export interface BrowserReplicaWireCodec {
+  encode(envelope: ProtocolEnvelope): Promise<Uint8Array> | Uint8Array
+  decode(wire: Uint8Array): Promise<ProtocolEnvelope> | ProtocolEnvelope
+}
+
+const protocolWireCodec: BrowserReplicaWireCodec = {
+  encode: encodeEnvelope,
+  decode: decodeEnvelope
+}
 
 export class BrowserReplicaSession {
   private readonly dedup = new DedupCache()
@@ -16,7 +32,8 @@ export class BrowserReplicaSession {
     private readonly transport: CollaborativeTransport,
     private readonly documentId: string,
     private readonly senderId: string,
-    storageName: string
+    storageName: string,
+    private readonly wireCodec: BrowserReplicaWireCodec
   ) {
     this.storage = new IndexedDbCollaborativeStorage({ name: storageName })
   }
@@ -26,6 +43,7 @@ export class BrowserReplicaSession {
     senderId: string
     transport: CollaborativeTransport
     storageName: string
+    wireCodec?: BrowserReplicaWireCodec
   }): Promise<BrowserReplicaSession> {
     const bootstrapStorage = new IndexedDbCollaborativeStorage({ name: options.storageName })
     const stored = await bootstrapStorage.loadDocument(options.documentId)
@@ -35,7 +53,8 @@ export class BrowserReplicaSession {
       options.transport,
       options.documentId,
       options.senderId,
-      options.storageName
+      options.storageName,
+      options.wireCodec ?? protocolWireCodec
     )
     await session.connect()
     return session
@@ -65,14 +84,7 @@ export class BrowserReplicaSession {
   private async connect(): Promise<void> {
     await this.transport.connect(this.documentId)
     this.unsubscribeTransport = this.transport.subscribe((wire) => {
-      try {
-        const envelope = decodeEnvelope(wire)
-        if (envelope.documentId !== this.documentId || envelope.kind !== 'automerge-change') return
-        if (this.dedup.hasOrAdd(envelope, envelope.createdAt)) return
-        if (this.document.applyChanges([envelope.payload])) void this.persist()
-      } catch {
-        // Invalid transport input is deliberately ignored at this trust boundary.
-      }
+      void this.receiveWire(wire)
     })
     for (const record of await this.storage.listOutbound(this.documentId)) {
       try {
@@ -87,17 +99,16 @@ export class BrowserReplicaSession {
   private async sendChange(change: Uint8Array): Promise<void> {
     this.sequence += 1
     const messageId = crypto.randomUUID()
-    const wire = encodeEnvelope(
-      createEnvelope({
-        documentId: this.documentId,
-        messageId,
-        senderId: this.senderId,
-        kind: 'automerge-change',
-        createdAt: Date.now(),
-        sequence: this.sequence,
-        payload: change
-      })
-    )
+    const envelope = createEnvelope({
+      documentId: this.documentId,
+      messageId,
+      senderId: this.senderId,
+      kind: 'automerge-change',
+      createdAt: Date.now(),
+      sequence: this.sequence,
+      payload: change
+    })
+    const wire = await this.wireCodec.encode(envelope)
     await this.storage.enqueue({
       id: messageId,
       documentId: this.documentId,
@@ -106,6 +117,17 @@ export class BrowserReplicaSession {
     })
     await this.transport.send(wire)
     await this.storage.acknowledgeOutbound(messageId)
+  }
+
+  private async receiveWire(wire: Uint8Array): Promise<void> {
+    try {
+      const envelope = await this.wireCodec.decode(wire)
+      if (envelope.documentId !== this.documentId || envelope.kind !== 'automerge-change') return
+      if (this.dedup.hasOrAdd(envelope, envelope.createdAt)) return
+      if (this.document.applyChanges([envelope.payload])) await this.persist()
+    } catch {
+      // Invalid/authentication-failing transport input is deliberately ignored at this trust boundary.
+    }
   }
 
   private async persist(): Promise<void> {

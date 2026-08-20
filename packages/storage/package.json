@@ -1,6 +1,6 @@
 {
   "name": "@e2e-col/storage",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "type": "module",
   "exports": {
@@ -9,5 +9,8 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --root ../.. packages/storage/src"
+  },
+  "dependencies": {
+    "@e2e-col/protocol": "workspace:*"
   }
 }

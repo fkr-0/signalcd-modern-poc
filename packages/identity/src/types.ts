@@ -3,6 +3,11 @@ export interface IdentityKeyPair {
   readonly privateKey: CryptoKey
 }
 
+export interface IdentityRecipient {
+  readonly userId: string
+  readonly phoneNumber: string
+}
+
 export interface OneTimePrekey extends IdentityKeyPair {
   readonly keyId: string
   readonly createdAt: number

@@ -1,12 +1,15 @@
 {
   "name": "@e2e-col/toy-signal-cli",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "tsx src/main.ts",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --root ../.. apps/toy-signal-cli"
+  },
+  "dependencies": {
+    "@e2e-col/protocol": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

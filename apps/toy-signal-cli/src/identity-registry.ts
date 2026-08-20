@@ -12,6 +12,20 @@ interface IdentityRecord {
   readonly createdAt: number
 }
 
+function publicIdentity(record: IdentityRecord): AuthenticatedIdentity {
+  return {
+    userId: record.userId,
+    phoneNumber: record.phoneNumber,
+    displayName: record.displayName
+  }
+}
+
+export interface AuthenticatedIdentity {
+  readonly userId: string
+  readonly phoneNumber: string
+  readonly displayName: string
+}
+
 export interface IdentityRegistrationRequest {
   readonly display_name: string
   readonly identity_key_public: string
@@ -58,6 +72,29 @@ export class IdentityRegistry {
     this.byPhone.clear()
     this.byToken.clear()
     this.reservedPhoneNumbers = new Set(reservedPhoneNumbers)
+  }
+
+  authenticate(authorization: string | undefined): AuthenticatedIdentity {
+    return publicIdentity(this.authorize(authorization))
+  }
+
+  authenticateToken(token: string): AuthenticatedIdentity {
+    if (!token) throw new IdentityApiError(401, 'session token required')
+    const record = this.byToken.get(token)
+    if (!record) throw new IdentityApiError(401, 'invalid or expired session token')
+    return publicIdentity(record)
+  }
+
+  identityKeyPublicByPhone(phoneNumber: string): string {
+    const record = this.byPhone.get(phoneNumber)
+    if (!record) throw new IdentityApiError(404, `unknown identity ${phoneNumber}`)
+    return record.identityKeyPublic
+  }
+
+  identityByPhone(phoneNumber: string): AuthenticatedIdentity {
+    const record = this.byPhone.get(phoneNumber)
+    if (!record) throw new IdentityApiError(404, `unknown identity ${phoneNumber}`)
+    return publicIdentity(record)
   }
 
   async register(request: IdentityRegistrationRequest): Promise<Record<string, unknown>> {

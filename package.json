@@ -1,6 +1,6 @@
 {
   "name": "e2e-col",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "description": "Modern E2EE collaborative-document implementation inspired by SignalCD.",
   "type": "module",

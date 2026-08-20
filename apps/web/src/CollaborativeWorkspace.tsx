@@ -1,0 +1,559 @@
+import {
+  CollaborativeClient,
+  type DocumentSession,
+  type DocumentSessionEvent,
+  type DocumentSummary,
+  type SessionStatus,
+  type SyncMode
+} from '@e2e-col/client'
+import {
+  HttpIdentityProvider,
+  IdentityClient,
+  IndexedDbIdentityStorage,
+  SyncLogClient,
+  type UserIdentity
+} from '@e2e-col/identity'
+import type { DocumentAccessState, DocumentRole } from '@e2e-col/protocol'
+import { IndexedDbCollaborativeStorage } from '@e2e-col/storage'
+import { createTransportFactory, type TransportFactory } from '@e2e-col/transport'
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { addGroupMember, createBrowserIdentityAdapter } from './client-adapter'
+import { SyncLogPanel } from './SyncLogPanel'
+
+const defaultDocumentId = '11111111-1111-4111-8111-111111111111'
+const sidecarUrl = import.meta.env.VITE_E2E_COL_SIDECAR_URL as string | undefined
+const identityServerUrl =
+  (import.meta.env.VITE_E2E_COL_IDENTITY_URL as string | undefined) ?? 'http://127.0.0.1:18080'
+const mockSignalUrl =
+  (import.meta.env.VITE_E2E_COL_MOCK_SIGNAL_URL as string | undefined) ??
+  'ws://127.0.0.1:18080/api/v1/messages'
+const configuredTransport = import.meta.env.VITE_E2E_COL_TRANSPORT as string | undefined
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+interface WorkspaceBinding {
+  readonly documentId: string
+  readonly groupId?: string
+}
+
+export function CollaborativeWorkspace({ identity }: { readonly identity: UserIdentity }) {
+  const binding = useMemo(workspaceBinding, [])
+  const clientRef = useRef<CollaborativeClient | undefined>(undefined)
+  const sessionUnsubscribeRef = useRef<(() => void) | undefined>(undefined)
+  const [session, setSession] = useState<DocumentSession>()
+  const [documents, setDocuments] = useState<readonly DocumentSummary[]>([])
+  const [text, setText] = useState('')
+  const [status, setStatus] = useState<SessionStatus>()
+  const [access, setAccess] = useState<DocumentAccessState>()
+  const [syncMode, setSyncModeState] = useState<SyncMode>('auto')
+  const [error, setError] = useState<string>()
+  const [syncLogVisible, setSyncLogVisible] = useState(false)
+  const [shareVisible, setShareVisible] = useState(false)
+  const [sharePhone, setSharePhone] = useState('')
+  const [shareRole, setShareRole] = useState<DocumentRole>('writer')
+  const [sharing, setSharing] = useState(false)
+  const syncLogClient = useMemo(() => new SyncLogClient({ baseUrl: identityServerUrl }), [])
+
+  const showError = useCallback((cause: unknown): void => {
+    setError(cause instanceof Error ? cause.message : 'Collaboration operation failed')
+  }, [])
+
+  const handleSessionEvent = useCallback((event: DocumentSessionEvent): void => {
+    if (event.type === 'document') setText(event.view.text)
+    else if (event.type === 'status') setStatus(event.status)
+    else if (event.type === 'access') setAccess(event.access)
+    else setError(event.error.message)
+  }, [])
+
+  const refreshDocuments = useCallback(async (client?: CollaborativeClient): Promise<void> => {
+    const target = client ?? clientRef.current
+    if (!target) return
+    setDocuments(await target.listDocuments())
+  }, [])
+
+  const attachSession = useCallback(
+    (next: DocumentSession): void => {
+      sessionUnsubscribeRef.current?.()
+      setSession(next)
+      setText(next.getView().text)
+      setStatus(next.getStatus())
+      setAccess(next.getAccessState())
+      const storedMode = readSyncMode(next.documentId)
+      next.setSyncMode(storedMode)
+      setSyncModeState(storedMode)
+      sessionUnsubscribeRef.current = next.subscribe(handleSessionEvent)
+      if (!binding.groupId) {
+        const url = new URL(window.location.href)
+        url.searchParams.set('document', next.documentId)
+        window.history.replaceState(null, '', url)
+      }
+    },
+    [handleSessionEvent, binding.groupId]
+  )
+
+  useEffect(() => {
+    let active = true
+    const identityClient = createIdentityClient()
+    const storage = new IndexedDbCollaborativeStorage({ name: `e2e-col-${identity.userId}` })
+    const transportFactory = createBrowserTransportFactory(identity, binding.groupId)
+    const identityAdapter = createBrowserIdentityAdapter({
+      identity,
+      identityClient,
+      baseUrl: identityServerUrl,
+      ...(binding.groupId === undefined ? {} : { groupId: binding.groupId })
+    })
+    const client = new CollaborativeClient({
+      senderId: identity.userId,
+      storage,
+      transportFactory,
+      identity: identityAdapter
+    })
+    clientRef.current = client
+
+    void client
+      .openDocument(binding.documentId)
+      .then(async (opened) => {
+        if (!active) return opened.close()
+        attachSession(opened)
+        await refreshDocuments(client)
+      })
+      .catch((cause) => {
+        if (active)
+          setError(cause instanceof Error ? cause.message : 'Document session failed to open')
+      })
+
+    return () => {
+      active = false
+      sessionUnsubscribeRef.current?.()
+      sessionUnsubscribeRef.current = undefined
+      clientRef.current = undefined
+      void client.close().finally(() => identityClient.close())
+    }
+  }, [binding.documentId, binding.groupId, identity, attachSession, refreshDocuments])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'l') {
+        event.preventDefault()
+        setSyncLogVisible((visible) => !visible)
+      }
+      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        if (session?.getSyncMode() === 'manual') void session.flush().catch(showError)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [session, showError])
+
+  async function openDocument(documentId: string): Promise<void> {
+    const client = clientRef.current
+    if (!client) return
+    setError(undefined)
+    try {
+      attachSession(await client.openDocument(documentId))
+    } catch (cause) {
+      showError(cause)
+    }
+  }
+
+  async function createDocument(): Promise<void> {
+    const client = clientRef.current
+    if (!client || binding.groupId) return
+    setError(undefined)
+    try {
+      const opened = await client.createDocument()
+      attachSession(opened)
+      await refreshDocuments(client)
+    } catch (cause) {
+      showError(cause)
+    }
+  }
+
+  async function edit(nextText: string): Promise<void> {
+    if (!session) return
+    try {
+      await session.editText(nextText)
+      await refreshDocuments()
+    } catch (cause) {
+      showError(cause)
+    }
+  }
+
+  function setSyncMode(mode: SyncMode): void {
+    if (!session) return
+    session.setSyncMode(mode)
+    localStorage.setItem(syncModeKey(session.documentId), mode)
+    setSyncModeState(mode)
+  }
+
+  async function flush(): Promise<void> {
+    if (!session) return
+    try {
+      await session.flush()
+    } catch (cause) {
+      showError(cause)
+    }
+  }
+
+  async function invite(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault()
+    if (!session || !binding.groupId || sharing) return
+    setSharing(true)
+    setError(undefined)
+    try {
+      await addGroupMember({
+        baseUrl: identityServerUrl,
+        groupId: binding.groupId,
+        identity,
+        phoneNumber: sharePhone.trim(),
+        role: shareRole
+      })
+      await session.inviteParticipant(sharePhone.trim(), shareRole)
+      setSharePhone('')
+      setShareVisible(false)
+      await refreshDocuments()
+    } catch (cause) {
+      showError(cause)
+    } finally {
+      setSharing(false)
+    }
+  }
+
+  const canEdit = Boolean(
+    session &&
+      access &&
+      !access.archived &&
+      !access.deleted &&
+      (access.selfRole === 'writer' || access.selfRole === 'admin') &&
+      status?.phase !== 'closed'
+  )
+  const canShare = Boolean(binding.groupId && access?.selfRole === 'admin' && !access.deleted)
+  const transportLabel = transportDescription(binding.groupId)
+
+  return (
+    <main className="shell workspace-shell">
+      <header className="app-bar">
+        <div className="brand-lockup">
+          <span className="product-mark small" aria-hidden="true">
+            EC
+          </span>
+          <div>
+            <strong>e2e-col</strong>
+            <span>collaboration PoC</span>
+          </div>
+        </div>
+        <fieldset className="identity-chip" aria-label="Current identity">
+          <span className="avatar" aria-hidden="true">
+            {identity.displayName.slice(0, 1).toUpperCase()}
+          </span>
+          <span>
+            <strong>{identity.displayName}</strong>
+            <small data-testid="identity-phone">{identity.phoneNumber}</small>
+          </span>
+        </fieldset>
+      </header>
+
+      <section className="workspace-heading compact-heading">
+        <div>
+          <p className="eyebrow">Private drafts</p>
+          <h1>Your encrypted workspace.</h1>
+          <p className="muted">
+            Documents stay local-first while each open session owns its transport, durable queue,
+            access state, and sync mode.
+          </p>
+        </div>
+        <div
+          className={`status-pill ${status?.transport === 'online' ? 'online' : ''}`}
+          role="status"
+        >
+          <span aria-hidden="true" />
+          {status?.phase ?? 'Opening'} · {status?.transport ?? 'disconnected'}
+        </div>
+      </section>
+
+      <section className="workspace-grid">
+        <aside className="document-list" aria-label="Documents">
+          <header>
+            <div>
+              <p className="section-label">Documents</p>
+              <h2>Local library</h2>
+            </div>
+            <button
+              type="button"
+              className="secondary-button compact-button"
+              onClick={() => void createDocument()}
+              disabled={Boolean(binding.groupId)}
+            >
+              New
+            </button>
+          </header>
+          {documents.length === 0 ? (
+            <p className="muted empty-list">No saved documents yet.</p>
+          ) : null}
+          <nav>
+            {documents.map((document) => {
+              const isCurrent = document.documentId === session?.documentId
+              const unavailable = Boolean(
+                binding.groupId && document.documentId !== binding.documentId
+              )
+              return (
+                <button
+                  type="button"
+                  key={document.documentId}
+                  className={`document-row ${isCurrent ? 'active' : ''}`}
+                  aria-current={isCurrent ? 'page' : undefined}
+                  disabled={unavailable}
+                  onClick={() => void openDocument(document.documentId)}
+                >
+                  <strong>{document.title ?? `Document ${document.documentId.slice(0, 8)}`}</strong>
+                  <small>
+                    {document.archived ? 'Archived' : new Date(document.updatedAt).toLocaleString()}
+                  </small>
+                </button>
+              )
+            })}
+          </nav>
+        </aside>
+
+        <section className="editor-card" aria-labelledby="editor-title">
+          <header className="editor-toolbar">
+            <div>
+              <p className="section-label">Document</p>
+              <h2 id="editor-title">
+                {session ? `Document ${session.documentId.slice(0, 8)}` : 'Opening document'}
+              </h2>
+            </div>
+            <div className="toolbar-actions">
+              <span className={`role-badge role-${access?.selfRole ?? 'reader'}`}>
+                {access?.selfRole ?? 'reader'}
+              </span>
+              <button
+                type="button"
+                className="secondary-button compact-button"
+                disabled={!canShare}
+                onClick={() => setShareVisible(true)}
+              >
+                Share
+              </button>
+              <button
+                type="button"
+                className="secondary-button compact-button"
+                aria-pressed={syncLogVisible}
+                title="Toggle sync log (Ctrl+Shift+L)"
+                onClick={() => setSyncLogVisible((visible) => !visible)}
+              >
+                Log
+              </button>
+            </div>
+          </header>
+
+          <fieldset className="sync-controls">
+            <span>{transportLabel}</span>
+            <label className="sync-mode-toggle">
+              <span>Sync mode</span>
+              <select
+                value={syncMode}
+                onChange={(event) => setSyncMode(event.target.value as SyncMode)}
+              >
+                <option value="auto">Auto</option>
+                <option value="manual">Manual</option>
+              </select>
+            </label>
+            <span className="pending-count" data-testid="pending-outbound">
+              {status?.pendingOutbound ?? 0} pending
+            </span>
+            {syncMode === 'manual' ? (
+              <button
+                type="button"
+                className="compact-button"
+                onClick={() => void flush()}
+                disabled={!session || (status?.pendingOutbound ?? 0) === 0}
+              >
+                Sync now
+              </button>
+            ) : null}
+          </fieldset>
+
+          <label className="sr-only" htmlFor="document-editor">
+            Document text
+          </label>
+          <textarea
+            id="document-editor"
+            value={text}
+            onChange={(event) => void edit(event.target.value)}
+            disabled={!canEdit}
+            placeholder={
+              access?.selfRole === 'reader'
+                ? 'You have read-only access.'
+                : 'Write something worth sharing…'
+            }
+          />
+          <footer>
+            <span>Browser-owned keys</span>
+            <span aria-hidden="true">·</span>
+            <span>
+              {access?.participants.filter((participant) => participant.active).length ?? 1}{' '}
+              participants
+            </span>
+            <span aria-hidden="true">·</span>
+            <span>{text.length} chars</span>
+          </footer>
+        </section>
+      </section>
+
+      {shareVisible && session ? (
+        <div
+          className="dialog-backdrop"
+          role="dialog"
+          aria-modal="false"
+          onClick={(event) => {
+            if (event.currentTarget === event.target) setShareVisible(false)
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') setShareVisible(false)
+          }}
+        >
+          <section
+            className="share-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="share-title"
+          >
+            <header>
+              <div>
+                <p className="section-label">Access control</p>
+                <h2 id="share-title">Invite participant</h2>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Close share dialog"
+                onClick={() => setShareVisible(false)}
+              >
+                ×
+              </button>
+            </header>
+            <form onSubmit={(event) => void invite(event)}>
+              <label htmlFor="invite-phone">Phone number</label>
+              <input
+                id="invite-phone"
+                type="tel"
+                required
+                pattern="\+[1-9][0-9]{7,14}"
+                value={sharePhone}
+                onChange={(event) => setSharePhone(event.target.value)}
+                placeholder="+15550000002"
+              />
+              <label htmlFor="invite-role">Role</label>
+              <select
+                id="invite-role"
+                value={shareRole}
+                onChange={(event) => setShareRole(event.target.value as DocumentRole)}
+              >
+                <option value="reader">Reader</option>
+                <option value="writer">Writer</option>
+                <option value="admin">Admin</option>
+              </select>
+              <button type="submit" disabled={sharing}>
+                {sharing ? 'Inviting…' : 'Invite'}
+              </button>
+            </form>
+            <div className="participant-list">
+              <p className="section-label">Participants</p>
+              {access?.participants.map((participant) => (
+                <div
+                  key={participant.participantId}
+                  className={!participant.active ? 'inactive' : ''}
+                >
+                  <span>
+                    <strong>
+                      {participant.displayName ?? participant.participantId.slice(0, 8)}
+                    </strong>
+                    <small>{participant.active ? 'Active' : 'Removed'}</small>
+                  </span>
+                  <span className={`role-badge role-${participant.role}`}>{participant.role}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {syncLogVisible ? <SyncLogPanel client={syncLogClient} /> : null}
+      {error ? (
+        <p className="error-banner" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </main>
+  )
+}
+
+function createIdentityClient(): IdentityClient {
+  return new IdentityClient({
+    provider: new HttpIdentityProvider({ baseUrl: identityServerUrl }),
+    storage: new IndexedDbIdentityStorage({ name: 'e2e-col-identity' })
+  })
+}
+
+function createBrowserTransportFactory(
+  identity: UserIdentity,
+  groupId: string | undefined
+): TransportFactory {
+  const type = resolveTransportType(groupId)
+  if (type === 'deterministic') return createTransportFactory({ type: 'deterministic' })
+  if (type === 'websocket') {
+    if (!sidecarUrl) throw new Error('VITE_E2E_COL_SIDECAR_URL is required for websocket transport')
+    return createTransportFactory({ type: 'websocket', websocket: { url: sidecarUrl } })
+  }
+  if (!groupId) throw new Error('mock transport requires a group query parameter')
+  return createTransportFactory({
+    type: 'mock',
+    mock: {
+      serverUrl: mockSignalUrl,
+      resolveRuntime: () => ({
+        authToken: identity.sessionToken,
+        groupId,
+        userId: identity.userId,
+        phoneNumber: identity.phoneNumber
+      })
+    }
+  })
+}
+
+function workspaceBinding(): WorkspaceBinding {
+  const params = new URLSearchParams(window.location.search)
+  const documentId = params.get('document') ?? defaultDocumentId
+  const groupId = params.get('group') ?? undefined
+  if (!UUID_RE.test(documentId)) throw new Error('document query parameter must be a UUID')
+  if (groupId !== undefined && !UUID_RE.test(groupId))
+    throw new Error('group query parameter must be a UUID')
+  return { documentId, ...(groupId === undefined ? {} : { groupId }) }
+}
+
+function resolveTransportType(groupId: string | undefined): 'deterministic' | 'mock' | 'websocket' {
+  if (
+    configuredTransport === 'deterministic' ||
+    configuredTransport === 'mock' ||
+    configuredTransport === 'websocket'
+  )
+    return configuredTransport
+  if (configuredTransport !== undefined && configuredTransport !== '')
+    throw new Error(`Unsupported VITE_E2E_COL_TRANSPORT value: ${configuredTransport}`)
+  return groupId ? 'mock' : sidecarUrl ? 'websocket' : 'deterministic'
+}
+
+function transportDescription(groupId: string | undefined): string {
+  const type = resolveTransportType(groupId)
+  if (type === 'mock') return 'Encrypted mock Signal group'
+  if (type === 'websocket') return 'Signal sidecar'
+  return 'Local deterministic transport'
+}
+
+function syncModeKey(documentId: string): string {
+  return `e2e-col-sync-mode-${documentId}`
+}
+
+function readSyncMode(documentId: string): SyncMode {
+  return localStorage.getItem(syncModeKey(documentId)) === 'manual' ? 'manual' : 'auto'
+}

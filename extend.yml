@@ -1,0 +1,1647 @@
+# extend.yml — Mock-Identity E2EE Collaboration Feature Specification
+#
+# Status: draft design specification
+# Target: e2e-col development-mode full-stack mock
+# Date: 2026-08-20
+#
+# This file specifies the architecture for a development-mode mock Signal
+# infrastructure that enables end-to-end encrypted collaborative editing
+# without requiring a real Signal account or network. It covers identity
+# provisioning, key management, document access control, session lifecycle,
+# synchronization modes, and transparent wire logging.
+#
+# The design ensures a clean separation: swap the mock backend for real
+# signal-cli at production time without changing browser application code.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 0. PROGRESS TRACKING (updated 2026-08-20)
+# ─────────────────────────────────────────────────────────────────────────────
+
+progress:
+  last_audit: "2026-08-20"
+  overall: "P1 complete, P2 ~80%, P3-P6 not started"
+
+  phases:
+    P1_identity_foundation:
+      status: "COMPLETE"
+      deliverables:
+        - item: "@e2e-col/identity package"
+          status: done
+          evidence: "packages/identity/src/ — 9 source files, 2 test files"
+        - item: "Identity provider endpoints in toy-signal-cli"
+          status: done
+          evidence: "apps/toy-signal-cli/src/identity-registry.ts, tests in identity-api.test.ts"
+        - item: "MockSignalTransport"
+          status: done
+          evidence: "packages/transport/src/mock-signal-transport.ts, tests in mock-signal-transport.test.ts"
+        - item: "Browser registration screen"
+          status: done
+          evidence: "apps/web/src/main.tsx — Registration component with identity flow"
+
+    P2_encrypted_routing:
+      status: "SUBSTANTIALLY_COMPLETE"
+      deliverables:
+        - item: "Per-recipient envelope encryption"
+          status: done
+          evidence: "packages/identity/src/encryption.ts, packages/protocol/src/encrypted-envelope.ts"
+        - item: "Encrypted routing in toy-signal-cli"
+          status: done
+          evidence: "apps/toy-signal-cli/src/encrypted-router.ts, tests in encrypted-routing.test.ts"
+        - item: "MockSignalTransport encryption integration"
+          status: done
+          evidence: "packages/transport/src/mock-signal-transport.ts — fanout frame codec"
+        - item: "Two-tab encrypted demo"
+          status: partial
+          evidence: >
+            Plumbing exists (wireCodec in main.tsx, BrowserReplicaWireCodec in session.ts)
+            but no integration test exercises the full encrypt->transport->decrypt E2E path.
+            Web app uses encrypted wireCodec when groupId is set.
+      gaps:
+        - "No E2E integration test for full encrypt->transport->decrypt path"
+
+    P3_access_control:
+      status: "NOT_STARTED"
+      deliverables:
+        - item: "Membership payload codecs"
+          status: not_started
+          evidence: "EnvelopeKind includes membership/archive/delete but no payload codecs exist"
+        - item: "Access-control state management"
+          status: not_started
+          evidence: "@e2e-col/client package does not exist"
+        - item: "Invite/share UI"
+          status: not_started
+          evidence: "No share dialog in web app"
+        - item: "Role enforcement"
+          status: not_started
+          evidence: "No role checks before CRDT apply"
+
+    P4_session_model:
+      status: "NOT_STARTED"
+      deliverables:
+        - item: "CollaborativeClient + DocumentSession"
+          status: not_started
+          evidence: "@e2e-col/client not implemented; BrowserReplicaSession still used"
+        - item: "Auto-sync and manual-sync modes"
+          status: not_started
+          evidence: "No sync mode toggle"
+        - item: "Sync status UI"
+          status: not_started
+          evidence: "Simple connected boolean only"
+        - item: "Multi-document support"
+          status: not_started
+          evidence: "Hardcoded defaultDocumentId in main.tsx"
+
+    P5_debug_tooling:
+      status: "NOT_STARTED"
+      deliverables:
+        - item: "Debug decrypt mode"
+          status: not_started
+        - item: "Structured sync log"
+          status: not_started
+        - item: "Sync log panel UI"
+          status: not_started
+        - item: "Export and filtering"
+          status: not_started
+
+    P6_production_readiness:
+      status: "NOT_STARTED"
+      note: "Blocked on P3-P5"
+
+  known_issues:
+    - id: BUG-1
+      severity: low
+      description: "DeterministicTransportNetwork was created unconditionally at module scope"
+      status: fixed
+      fix: "Lazy initialization via getNetwork() in main.tsx"
+    - id: BUG-2
+      severity: medium
+      description: "CryptoKeyPair type error in encrypted-routing.test.ts"
+      status: fixed
+      fix: "Used NodeCryptoKey + runtime type guard pattern from identity-api.test.ts"
+    - id: ISSUE-1
+      severity: medium
+      description: "Identity storage lives in @e2e-col/identity instead of @e2e-col/storage"
+      status: open
+      note: "Spec says IdentityStorage should be in @e2e-col/storage; currently co-located with identity package"
+    - id: ISSUE-2
+      severity: low
+      description: "BrowserReplicaSession violates spec layering (imports core/protocol/storage/transport directly)"
+      status: open
+      note: "Should be replaced by @e2e-col/client (P4); acceptable as interim"
+    - id: ISSUE-3
+      severity: low
+      description: "No integration test for full E2EE path (encrypt->transport->decrypt)"
+      status: open
+
+  test_coverage:
+    packages/identity: "2 test files covering client + encryption; missing provider/storage/encoding tests"
+    packages/protocol: "1 test file, good coverage"
+    packages/transport: "3 test files, good coverage"
+    packages/storage: "1 test file, good coverage"
+    apps/toy-signal-cli: "4 test files, good coverage"
+    apps/web: "0 test files"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. DESIGN PRINCIPLES
+# ─────────────────────────────────────────────────────────────────────────────
+
+principles:
+  - name: pluggable_backend
+    description: >
+      The mock Signal infrastructure implements the same transport/identity
+      contract as the real sidecar. Browser code uses a factory; swapping
+      mock for real requires changing one config entry, zero application code.
+
+  - name: browser_never_owns_signal_credentials
+    description: >
+      Even in mock mode, the browser never stores Signal device credentials.
+      The mock identity provider runs server-side (toy-signal-cli or sidecar).
+      The browser receives derived identity tokens and public key material only.
+
+  - name: encryption_is_real_but_optional_visible
+    description: >
+      Envelopes are encrypted with real ephemeral key exchange (X25519 +
+      XSalsa20-Poly1305 or equivalent WebCrypto). A debug mode allows the
+      mock server to retain decryption keys for transparent logging. In
+      production mode the server CANNOT decrypt.
+
+  - name: identity_before_document
+    description: >
+      A user must have an identity before creating or joining documents.
+      Identity is the root of session, access-control, and envelope-authorship
+      binding.
+
+  - name: convergent_under_mock_conditions
+    description: >
+      The mock network must support the same delivery guarantees as the real
+      Signal path: at-least-once, delayed, reordered, duplicated. The
+      deterministic transport remains available for unit tests.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. ARCHITECTURE OVERVIEW
+# ─────────────────────────────────────────────────────────────────────────────
+
+architecture:
+  layers:
+    - name: browser_app
+      description: >
+        React UI. Depends on @e2e-col/client only. Never touches protocol,
+        transport, or Signal concepts directly.
+
+    - name: client_sdk
+      package: "@e2e-col/client"
+      description: >
+        Orchestrates identity session, document sessions, access control,
+        storage, and transport. Framework-neutral.
+
+    - name: identity_layer
+      package: "@e2e-col/identity"
+      description: >
+        NEW package. Identity generation, key management, envelope
+        encryption/decryption, participant verification. Runs in browser
+        but never stores Signal device credentials.
+
+    - name: core
+      package: "@e2e-col/core"
+      description: CRDT document model. Unchanged.
+
+    - name: protocol
+      package: "@e2e-col/protocol"
+      description: >
+        Envelope framing, validation, chunking. Extended with encrypted
+        payload wrapping and membership payload codecs.
+
+    - name: storage
+      package: "@e2e-col/storage"
+      description: >
+        IndexedDB persistence. Extended with identity store, key store,
+        access-control state store.
+
+    - name: transport
+      package: "@e2e-col/transport"
+      description: >
+        Byte delivery. Unchanged interface. New MockSignalTransport adapter.
+
+    - name: mock_signal_server
+      location: "apps/toy-signal-cli"
+      description: >
+        Enhanced to act as identity provider, encrypted message router,
+        group manager, and optional transparent decryptor/logger.
+
+  data_flow:
+    local_edit: >
+      UI -> ClientSDK.editText() -> CRDT change -> protocol envelope ->
+      encrypt(identity, recipient_keys) -> transport.send() ->
+      mock-server receives -> (optional decrypt+log) ->
+      re-encrypt for each group member -> deliver via SSE/WS ->
+      recipient transport.subscribe() -> decrypt(identity, own_keys) ->
+      protocol decode -> CRDT apply -> persist -> UI event
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. IDENTITY SYSTEM
+# ─────────────────────────────────────────────────────────────────────────────
+
+identity:
+  # 3.1 Identity provider (server-side)
+  provider:
+    location: "apps/toy-signal-cli"
+    description: >
+      The mock Signal server acts as a simplified identity provider.
+      It generates and stores keypairs, assigns phone-number-style
+      identifiers, and issues session tokens. In production, this role
+      is filled by Signal's account/registration service.
+
+    registration:
+      description: >
+        Browser clients register by calling a REST endpoint. The server
+        generates a Curve25519 identity keypair, assigns a phone-number
+        identifier from a mock namespace, and returns the public material
+        plus a session token.
+
+      endpoint: "POST /api/v1/identity/register"
+      request:
+        display_name: "string, optional, 1-64 chars"
+      response:
+        user_id: "string, UUID"
+        phone_number: "string, e.g. +1555000NNNN"
+        identity_key_public: "base64, 32 bytes"
+        signed_prekey_public: "base64, 32 bytes"
+        signed_prekey_signature: "base64, 64 bytes"
+        one_time_prekeys: "array of base64, 32 bytes each (batch of 10)"
+        session_token: "string, opaque bearer token"
+        created_at: "unix millis"
+
+      behavior:
+        - Server generates identity keypair (Ed25519 or X25519)
+        - Server generates signed prekey pair
+        - Server generates batch of one-time prekey pairs
+        - Phone number assigned from +15550000001..+15550009999 range
+        - All private keys stored server-side in mock memory/file store
+        - Browser receives ONLY public key material + session token
+        - In debug/development mode, server optionally exposes private
+          keys via a separate authenticated debug endpoint (see §8)
+
+    key_distribution:
+      description: >
+        When user A wants to send to user B, A needs B's public key bundle.
+        The server provides a Signal-like key-lookup API.
+      endpoint: "GET /api/v1/identity/keys/:phone_number"
+      response:
+        identity_key_public: "base64"
+        signed_prekey_public: "base64"
+        signed_prekey_signature: "base64"
+        one_time_prekey: "base64, consumed on first use"
+      behavior:
+        - Returns public key bundle for the target phone number
+        - One-time prekey is consumed (removed from pool) on first retrieval
+        - Server replenishes one-time prekeys when pool falls below threshold
+
+  # 3.2 Browser identity client
+  client:
+    package: "@e2e-col/identity"
+    description: >
+      Browser-side identity management. Handles registration, key storage,
+      session management, and cryptographic operations. Private keys are
+      generated in the browser using WebCrypto/SubtleCrypto and NEVER
+      leave the browser. The server's role is to sign/verify identity
+      claims and distribute public key bundles.
+
+    types:
+      UserIdentity:
+        description: "Represents the local user's identity"
+        fields:
+          user_id: "string, UUID, assigned by server"
+          phone_number: "string, assigned by server"
+          display_name: "string, user-chosen"
+          identity_keypair:
+            description: "Generated in browser via WebCrypto"
+            public: "CryptoKey (exportable)"
+            private: "CryptoKey (non-exportable, stored in IndexedDB)"
+          signed_prekeypair:
+            description: "Generated in browser, public part uploaded to server"
+            public: "CryptoKey"
+            private: "CryptoKey (non-exportable)"
+          session_token: "string, bearer token for server API calls"
+          created_at: "number, unix millis"
+
+      RemoteIdentity:
+        description: "Cached public key material for a remote peer"
+        fields:
+          user_id: "string, UUID"
+          phone_number: "string"
+          display_name: "string, optional"
+          identity_key_public: "CryptoKey (imported)"
+          signed_prekey_public: "CryptoKey (imported)"
+          verified: "boolean, manual verification flag"
+          fetched_at: "number, unix millis"
+
+      EnvelopeEncryption:
+        description: >
+          Per-recipient encryption layer. Each envelope payload is
+          encrypted with a symmetric key derived from X25519 ECDH
+          between sender ephemeral key and recipient's identity+prekey.
+        fields:
+          ephemeral_public: "base64, 32 bytes"
+          nonce: "base64, 24 bytes (XSalsa20) or 12 bytes (AES-GCM)"
+          ciphertext: "base64, payload + auth tag"
+
+    operations:
+      register:
+        description: >
+          1. Generate identity keypair in browser (WebCrypto)
+          2. Generate signed prekeypair in browser
+          3. Generate batch of one-time prekeypairs in browser
+          4. Upload public parts to server with chosen display_name
+          5. Store private keys in IndexedDB (non-exportable CryptoKey)
+          6. Return UserIdentity to caller
+        note: >
+          Private keys are generated and stored entirely in the browser.
+          The server never sees them. This matches Signal's real model where
+          the server distributes public keys but never holds private keys.
+
+      open_session:
+        description: >
+          Load existing identity from IndexedDB storage. Verify session
+          token is still valid via server health check. Return
+          UserIdentity for use by ClientSDK.
+
+      encrypt_envelope:
+        description: >
+          Given a ProtocolEnvelope (plaintext payload) and a list of
+          recipient UserIds:
+          1. Generate ephemeral X25519 keypair
+          2. For each recipient, fetch their public key bundle (cached
+             or from server)
+          3. Derive shared secret via ECDH (ephemeral private +
+             recipient identity public)
+          4. Encrypt payload with derived symmetric key
+          5. Produce per-recipient encrypted envelope
+        output: "Map<RecipientUserId, EncryptedEnvelope>"
+
+      decrypt_envelope:
+        description: >
+          Given an EncryptedEnvelope and the local UserIdentity:
+          1. ECDH between recipient's identity private key and
+             sender's ephemeral public key
+          2. Derive symmetric key
+          3. Decrypt ciphertext
+          4. Return original ProtocolEnvelope payload
+        note: >
+          This is called on the receive path. The transport delivers
+          encrypted bytes; the identity layer decrypts before the
+          protocol layer decodes.
+
+      verify_remote_identity:
+        description: >
+          Mark a remote identity as manually verified (safety number
+          comparison). Updates the `verified` flag in local cache.
+          Unverified identities produce a UI warning but do not block
+          collaboration.
+
+  # 3.3 Key storage
+  storage:
+    description: >
+      Identity material is stored in IndexedDB, separate from document
+      storage. This prevents identity loss from document storage corruption
+      and vice versa.
+    database: "e2e-col-identity"
+    stores:
+      - name: "identities"
+        key_path: "user_id"
+        description: "Local user identity (one per browser profile)"
+      - name: "keypairs"
+        key_path: "key_id"
+        description: >
+          CryptoKey pairs stored via structured clone. IndexedDB supports
+          CryptoKey natively. Fields: key_id, type (identity|signed_pre|
+          one_time_pre|ephemeral), public, private, created_at.
+      - name: "remote_identities"
+        key_path: "user_id"
+        description: "Cached public key bundles for known peers"
+      - name: "sessions"
+        key_path: "user_id"
+        description: "Session tokens and server state"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. DOCUMENT ACCESS CONTROL
+# ─────────────────────────────────────────────────────────────────────────────
+
+access_control:
+  model: "creator-as-admin, invitation-based"
+
+  roles:
+    reader:
+      can: ["read document", "receive updates"]
+      cannot: ["edit", "invite", "remove", "archive", "delete"]
+    writer:
+      can: ["read", "edit", "receive updates"]
+      cannot: ["invite", "remove", "archive", "delete"]
+    admin:
+      can: ["read", "edit", "invite", "remove", "change roles", "archive", "delete"]
+      cannot: []
+
+  lifecycle:
+    - action: create_document
+      actor: "any authenticated user"
+      result: "actor becomes admin, document created"
+      envelope_kind: "automerge-change (first edit)"
+      access_payload:
+        description: >
+          A membership envelope is emitted alongside the first edit.
+          It contains the initial access-control state signed by the
+          creator's identity key.
+
+    - action: invite_participant
+      actor: "admin"
+      result: "new participant added with specified role"
+      envelope_kind: "membership"
+      payload:
+        type: "invite"
+        target_user_id: "UUID"
+        target_phone: "string"
+        granted_role: "reader | writer | admin"
+        granted_by: "UUID (admin's user_id)"
+        granted_at: "unix millis"
+        signature: "base64, Ed25519 signature over payload by admin's identity key"
+      behavior:
+        - Admin sends a membership envelope to the document group
+        - All participants receive and verify the admin's signature
+        - Target participant is added to the local access-control state
+        - If target is not yet connected, the membership envelope is
+          delivered when they join (Signal retains group messages)
+
+    - action: remove_participant
+      actor: "admin"
+      result: "participant removed, their future edits rejected"
+      envelope_kind: "membership"
+      payload:
+        type: "remove"
+        target_user_id: "UUID"
+        removed_by: "UUID"
+        removed_at: "unix millis"
+        signature: "base64"
+      behavior:
+        - Admin sends removal membership envelope
+        - All participants verify and update local access state
+        - Removed participant's subsequent edits are rejected by
+          all remaining participants (checked before CRDT apply)
+        - Removed participant retains local copy (no remote deletion)
+
+    - action: change_role
+      actor: "admin"
+      result: "participant role updated"
+      envelope_kind: "membership"
+      payload:
+        type: "role_change"
+        target_user_id: "UUID"
+        new_role: "reader | writer | admin"
+        changed_by: "UUID"
+        changed_at: "unix millis"
+        signature: "base64"
+
+    - action: archive_document
+      actor: "admin"
+      result: "document marked read-only for all participants"
+      envelope_kind: "archive"
+      payload:
+        type: "archive"
+        archived_by: "UUID"
+        archived_at: "unix millis"
+        signature: "base64"
+
+    - action: delete_document
+      actor: "admin"
+      result: >
+        Document tombstoned. Local copies remain (no remote deletion).
+        All participants mark document as deleted in their local state.
+      envelope_kind: "delete"
+      payload:
+        type: "delete"
+        deleted_by: "UUID"
+        deleted_at: "unix millis"
+        signature: "base64"
+
+  verification:
+    description: >
+      All membership envelopes (invite/remove/role_change/archive/delete)
+      carry an Ed25519 signature by the acting admin's identity key.
+      Recipients verify the signature against the known public identity
+      key of the claimed actor. Invalid signatures cause the envelope
+      to be rejected before any state mutation.
+
+    cross_device_consistency: >
+      Because membership state is derived from signed envelopes
+      delivered through the same broadcast channel as document edits,
+      all honest participants converge on the same access-control
+      state. This mirrors the CRDT convergence guarantee.
+
+  storage:
+    description: >
+      Access-control state is persisted alongside the document snapshot.
+      It is reconstructed from membership envelopes on recovery.
+    fields:
+      document_id: "string, UUID"
+      self_role: "reader | writer | admin"
+      participants: "array of DocumentParticipant"
+      archived: "boolean"
+      deleted: "boolean"
+      revision: "number, incremented on each membership change"
+    store: "new IndexedDB object store 'access_control' in document DB"
+
+  envelope_integration:
+    description: >
+      The existing ProtocolEnvelope.kind enum already reserves 'membership',
+      'archive', and 'delete'. This spec defines their payload schemas.
+    membership_payload_schema:
+      type: "object"
+      fields:
+        action: "invite | remove | role_change"
+        target_user_id: "UUID"
+        role: "reader | writer | admin | null (for remove)"
+        actor_user_id: "UUID"
+        timestamp: "unix millis"
+        signature: "base64 Ed25519"
+    archive_payload_schema:
+      type: "object"
+      fields:
+        action: "archive | unarchive"
+        actor_user_id: "UUID"
+        timestamp: "unix millis"
+        signature: "base64 Ed25519"
+    delete_payload_schema:
+      type: "object"
+      fields:
+        action: "delete"
+        actor_user_id: "UUID"
+        timestamp: "unix millis"
+        signature: "base64 Ed25519"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. SESSION MODEL
+# ─────────────────────────────────────────────────────────────────────────────
+
+session:
+  # 5.1 Identity session
+  identity_session:
+    description: >
+      Represents an authenticated user on this browser. Created when
+      the user registers or opens an existing identity. Provides the
+      identity context for all document sessions.
+    lifecycle:
+      - "register() -> new identity, stored locally, server knows public keys"
+      - "open() -> load existing identity from IndexedDB"
+      - "verify_server() -> check session token validity"
+      - "close() -> clear in-memory session state (identity persists in IDB)"
+    fields:
+      identity: "UserIdentity"
+      transport_factory: "TransportFactory (bound to this identity's context)"
+      storage: "DurableCollaborativeStorage (namespaced by user_id)"
+
+  # 5.2 Document session
+  document_session:
+    description: >
+      A collaborative editing session for one document, bound to one
+      identity. Created when the user opens or creates a document.
+    binding:
+      identity: "UserIdentity (immutable for session lifetime)"
+      document_id: "UUID (immutable for session lifetime)"
+      transport: "CollaborativeTransport (one per document per identity)"
+      storage: "DurableCollaborativeStorage (namespaced by user_id + document_id)"
+    lifecycle:
+      - action: create
+        steps:
+          - "Generate document UUID"
+          - "Create CRDT document (optionally with initial text)"
+          - "Persist snapshot + initial membership (self as admin)"
+          - "Emit first automerge-change + membership envelopes"
+          - "Connect transport to document channel"
+          - "Enter 'ready' phase"
+      - action: join
+        steps:
+          - "Receive invitation (membership envelope from admin)"
+          - "Verify admin signature"
+          - "Update local access-control state"
+          - "Connect transport to document channel"
+          - "Receive and apply existing document state (snapshot merge)"
+          - "Enter 'ready' phase"
+      - action: edit
+        steps:
+          - "Check self_role >= writer"
+          - "Mutate CRDT, produce changes"
+          - "Create protocol envelopes (kind=automerge-change)"
+          - "Encrypt each envelope for all participants"
+          - "Atomic storage commit (snapshot + outbound)"
+          - "Attempt transport send"
+          - "Emit document/status event"
+      - action: receive
+        steps:
+          - "Transport delivers encrypted bytes"
+          - "Decrypt with own identity keys"
+          - "Decode protocol envelope"
+          - "Validate envelope (version, kind, document_id)"
+          - "Dedup check"
+          - "If membership/archive/delete: verify signature, update access state"
+          - "If automerge-change: check sender has writer+ role"
+          - "Apply to CRDT"
+          - "Persist snapshot + seen-message"
+          - "Emit document/status event"
+      - action: close
+        steps:
+          - "Unsubscribe from transport"
+          - "Persist final snapshot"
+          - "Close transport"
+          - "Enter 'closed' phase"
+    phases:
+      - "opening: connecting transport, loading state"
+      - "ready: idle, can edit or receive"
+      - "syncing: actively sending/receiving"
+      - "offline: transport disconnected, local edits available"
+      - "recovering: checkpoint/snapshot recovery in progress"
+      - "error: unrecoverable state"
+      - "closed: terminal"
+
+  # 5.3 Multi-document session
+  multi_document:
+    description: >
+      One identity session can have multiple document sessions open
+      simultaneously. Each document gets its own transport instance,
+      storage namespace, and CRDT state. The identity layer is shared.
+    storage_namespacing: "e2e-col-{user_id}-{document_id}"
+    transport_binding: "one WebSocket/transport per document (not multiplexed)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. MOCK SIGNAL SERVER ENHANCEMENTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+mock_signal_server:
+  location: "apps/toy-signal-cli"
+  description: >
+    Enhanced toy-signal-cli that serves as the development-mode backbone.
+    It replaces the need for signal-cli, Signal accounts, and real
+    Signal groups. All operations are deterministic and inspectable.
+
+  # 6.1 New endpoints
+  endpoints:
+    identity:
+      - method: POST
+        path: "/api/v1/identity/register"
+        description: "Register new user, generate keypair, assign phone number"
+        auth: none
+
+      - method: GET
+        path: "/api/v1/identity/keys/:phone_number"
+        description: "Get public key bundle for a user"
+        auth: "Bearer session_token"
+
+      - method: POST
+        path: "/api/v1/identity/keys/replenish"
+        description: "Upload new one-time prekeys"
+        auth: "Bearer session_token"
+
+    groups:
+      - method: POST
+        path: "/api/v1/groups"
+        description: "Create a new group (maps to a document)"
+        auth: "Bearer session_token"
+        request:
+          document_id: "UUID"
+          name: "string, optional"
+        response:
+          group_id: "string"
+          members: "array of {user_id, phone_number, role}"
+
+      - method: POST
+        path: "/api/v1/groups/:group_id/members"
+        description: "Add member to group"
+        auth: "Bearer session_token"
+        request:
+          phone_number: "string"
+          role: "reader | writer | admin"
+
+      - method: DELETE
+        path: "/api/v1/groups/:group_id/members/:phone_number"
+        description: "Remove member from group"
+        auth: "Bearer session_token"
+
+    messaging:
+      description: >
+        Existing send/receive/SSE endpoints are preserved. Messages are
+        now routed by group membership with per-recipient encryption
+        envelopes instead of plaintext protocol envelopes.
+      changes:
+        - "send() accepts encrypted envelope (opaque to server in production mode)"
+        - "SSE delivers encrypted envelopes to each group member"
+        - "Server does NOT decrypt in production mode"
+        - "In debug mode, server optionally decrypts for logging (see §6.3)"
+
+  # 6.2 Message routing with encryption
+  encrypted_routing:
+    description: >
+      When sender A sends an encrypted envelope to a group, the server
+      delivers it to all other group members. Each recipient receives
+      the envelope encrypted specifically for them (sender produced
+      per-recipient ciphertext in §3.2 encrypt_envelope).
+    flow:
+      - "Sender calls send(group_id, {recipient_phone: encrypted_payload, ...})"
+      - "Server stores the per-recipient payloads"
+      - "For each group member (except sender), server delivers their
+         designated encrypted payload via SSE"
+      - "Sender receives syncMessage with their own echo (for UI confirmation)"
+      - "Server never decrypts the payload (production mode)"
+
+  # 6.3 Debug/transparent decryption mode
+  debug_mode:
+    description: >
+      In development, the mock server can optionally retain the private
+      keys it generated during registration (since it generated them
+      server-side for mock mode). This allows the server to decrypt
+      all traffic for transparent logging and debugging.
+    activation:
+      env_var: "E2E_COL_DEBUG_DECRYPT=true"
+      endpoint: "POST /__toy__/v1/config {debugDecrypt: true}"
+    capabilities:
+      - "Decrypt any encrypted envelope passing through the server"
+      - "Display plaintext payload content in the sync log"
+      - "Verify envelope signatures without forwarding"
+      - "Detect and flag protocol violations"
+    logging:
+      description: >
+        All decrypted messages are logged to a structured event stream.
+        The log includes: timestamp, sender, recipient, envelope kind,
+        plaintext payload preview (first 256 chars), signature status.
+      endpoint: "GET /__toy__/v1/debug/log (SSE stream)"
+      endpoint_poll: "GET /__toy__/v1/debug/log?since=<timestamp>"
+      fields_per_entry:
+        timestamp: "unix millis"
+        direction: "inbound | outbound"
+        sender_phone: "string"
+        recipient_phone: "string"
+        document_id: "UUID"
+        envelope_kind: "string"
+        message_id: "UUID"
+        decrypted_payload_preview: "string, first 256 chars or null if not decrypting"
+        signature_valid: "boolean | null"
+        raw_size_bytes: "number"
+    safety:
+      description: >
+        Debug mode MUST NOT be available in production builds. The
+        env var and debug endpoints are guarded by a build-time flag
+        and a runtime check that the server is running in toy/debug mode.
+
+  # 6.4 Sync log
+  sync_log:
+    description: >
+      A human-readable, structured log of all synchronization events.
+      Available via both the server debug endpoint and an in-browser
+      UI panel. Logs are always available (even without debug decrypt
+      mode); decryption mode adds payload content to the log.
+    server_endpoint: "GET /__toy__/v1/sync-log"
+    browser_component: "SyncLogPanel (React component in apps/web)"
+    log_levels:
+      - wire: "Raw bytes in/out, size, direction"
+      - envelope: "Decoded envelope metadata (kind, sender, document, message_id)"
+      - application: "CRDT operations, access-control changes, session events"
+      - decrypted: "Plaintext payload content (debug decrypt mode only)"
+    browser_log_sources:
+      - "Transport send/receive events"
+      - "Protocol encode/decode events"
+      - "Storage commit events"
+      - "CRDT apply/change events"
+      - "Access-control state changes"
+      - "Session phase transitions"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. SYNCHRONIZATION MODES
+# ─────────────────────────────────────────────────────────────────────────────
+
+sync_modes:
+  auto_sync:
+    description: >
+      Default mode. Every local edit is immediately encrypted and sent
+      via transport. Inbound envelopes are applied as soon as received.
+      The UI updates in real-time.
+    behavior:
+      - "editText() -> encrypt -> send() immediately"
+      - "transport.subscribe() -> decrypt -> apply immediately"
+      - "No manual intervention needed"
+    status_indicator: "Shows syncing/ready/offline in UI"
+
+  manual_sync:
+    description: >
+      Optional mode where outbound sends are batched and require a
+      user gesture (button press) to flush. Inbound envelopes are
+      still applied immediately (pulling is always allowed).
+    behavior:
+      - "editText() -> encrypt -> persist outbound only (no send)"
+      - "User presses 'Sync' button -> flush all pending outbound"
+      - "transport.subscribe() -> decrypt -> apply immediately"
+    trigger:
+      ui_element: "Sync button in toolbar"
+      keyboard_shortcut: "Ctrl+Shift+S / Cmd+Shift+S"
+    use_case: >
+      Useful for bandwidth-constrained environments, deliberate review
+      before sharing, or demonstration of the offline-first model.
+
+  sync_toggle:
+    description: >
+      UI toggle between auto and manual sync. Stored per-document in
+      local storage. Default is auto.
+    storage: "localStorage key 'e2e-col-sync-mode-{document_id}'"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. BROWSER UI INTEGRATION
+# ─────────────────────────────────────────────────────────────────────────────
+
+ui:
+  # 8.1 Identity management UI
+  identity:
+    registration_screen:
+      description: >
+        Shown on first visit. User enters display name, clicks register.
+        Server assigns identity. Browser stores keys.
+      fields:
+        - display_name: "text input, 1-64 chars"
+      actions:
+        - register: "POST /api/v1/identity/register"
+      post_registration: "Redirect to document list"
+
+    identity_indicator:
+      description: >
+        Persistent UI element showing current user's display name,
+        phone number, and verification status. Clicking opens
+        identity details.
+      location: "top-right corner of app"
+      shows:
+        - display_name
+        - phone_number
+        - identity_verified_badge
+
+    safety_number:
+      description: >
+        Signal-style safety number derived from both users' identity
+        keys. Users can compare out-of-band to verify no MITM.
+      format: "60-digit numeric string (grouped in 5s)"
+      generation: "SHA-256(sorted([my_identity_pub, their_identity_pub]))"
+
+  # 8.2 Document management UI
+  documents:
+    list_view:
+      description: >
+        Shows all documents the current identity has access to.
+        Filtered by role. Shows sync status per document.
+      columns:
+        - title
+        - role_badge: "reader/writer/admin"
+        - last_modified
+        - sync_status: "synced/syncing/offline/pending"
+        - participant_count
+
+    create_button:
+      description: >
+        Creates a new document. Current user becomes admin.
+        Optionally set title and initial text.
+      fields:
+        - title: "text input"
+        - initial_text: "textarea, optional"
+
+    share_dialog:
+      description: >
+        Admin-only dialog to invite participants by phone number.
+        Select role (reader/writer/admin). Generates and sends
+        membership envelope.
+      fields:
+        - phone_number: "text input, validated format"
+        - role: "select: reader/writer/admin"
+      actions:
+        - invite: "Creates membership envelope, sends to group"
+
+  # 8.3 Sync log panel
+  sync_log_panel:
+    description: >
+      Collapsible panel at bottom of editor showing real-time
+      synchronization events. Useful for debugging and demos.
+    features:
+      - "Filter by level (wire/envelope/application/decrypted)"
+      - "Filter by direction (inbound/outbound)"
+      - "Filter by participant"
+      - "Search by document_id or message_id"
+      - "Auto-scroll with pause on hover"
+      - "Export log as JSON"
+    access: "Toggle via toolbar button or keyboard shortcut (Ctrl+Shift+L)"
+
+  # 8.4 Sync control
+  sync_control:
+    description: >
+      Toolbar area showing sync mode and providing manual sync trigger.
+    elements:
+      - sync_mode_toggle: "Auto / Manual switch"
+      - sync_button: "Flush pending (visible in manual mode)"
+      - pending_count: "Number of unsent outbound envelopes"
+      - transport_status: "Connected / Reconnecting / Offline"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9. PACKAGE STRUCTURE
+# ─────────────────────────────────────────────────────────────────────────────
+
+packages:
+  new:
+    - name: "@e2e-col/identity"
+      location: "packages/identity"
+      description: >
+        Identity generation, key management, envelope encryption,
+        remote identity cache, safety number generation.
+      depends_on:
+        - "@e2e-col/protocol"
+      exports:
+        - "UserIdentity"
+        - "RemoteIdentity"
+        - "IdentityProvider (client interface to mock server)"
+        - "EnvelopeEncryptor"
+        - "EnvelopeDecryptor"
+        - "SafetyNumber"
+        - "IdentityStorage"
+        - "createIdentityClient()"
+
+  modified:
+    - name: "@e2e-col/protocol"
+      changes:
+        - "Add membership/archive/delete payload codec interfaces"
+        - "Add EncryptedEnvelope wrapper type"
+        - "Add payload encryption/decryption hooks (delegated to identity)"
+      new_exports:
+        - "MembershipPayload"
+        - "ArchivePayload"
+        - "DeletePayload"
+        - "encodeMembershipPayload()"
+        - "decodeMembershipPayload()"
+        - "encodeArchivePayload()"
+        - "decodeArchivePayload()"
+        - "encodeDeletePayload()"
+        - "decodeDeletePayload()"
+
+    - name: "@e2e-col/transport"
+      changes:
+        - "Add MockSignalTransport that connects to enhanced toy-signal-cli"
+      new_exports:
+        - "MockSignalTransport"
+        - "MockSignalTransportOptions"
+
+    - name: "@e2e-col/storage"
+      changes:
+        - "Add identity storage (IdentityStorage interface + IndexedDB impl)"
+        - "Add access-control state storage"
+      new_exports:
+        - "IdentityStorage"
+        - "IndexedDbIdentityStorage"
+        - "AccessControlState"
+        - "AccessControlStorage"
+
+    - name: "@e2e-col/client"
+      changes:
+        - "Implement CollaborativeClient, DocumentSession per TARGET-API-SPEC"
+        - "Integrate identity, encryption, access control"
+      new_exports:
+        - "CollaborativeClient"
+        - "DocumentSession"
+        - "SessionStatus"
+        - "DocumentSessionEvent"
+        - "DocumentAccessState"
+
+    - name: "apps/toy-signal-cli"
+      changes:
+        - "Add identity provider endpoints (register, key lookup, prekeys)"
+        - "Add group management endpoints (create, add/remove members)"
+        - "Add encrypted message routing (per-recipient delivery)"
+        - "Add debug decrypt mode with transparent logging"
+        - "Add sync log endpoint"
+        - "Add /__toy__/v1/reset extension for identity state"
+
+    - name: "apps/web"
+      changes:
+        - "Replace BrowserReplicaSession with CollaborativeClient"
+        - "Add identity registration/login screen"
+        - "Add document list view"
+        - "Add share/invite dialog"
+        - "Add sync log panel"
+        - "Add sync mode toggle"
+        - "Add safety number verification UI"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10. TRANSPORT FACTORY AND BACKEND SELECTION
+# ─────────────────────────────────────────────────────────────────────────────
+
+transport_factory:
+  description: >
+    The ClientSDK uses a TransportFactory to create transport instances.
+    The factory is configured at client construction time and selects
+    the appropriate transport implementation based on environment.
+
+  implementations:
+    - name: deterministic
+      class: "DeterministicTransportNetwork"
+      use: "Unit tests, CI"
+      config: "No server needed"
+
+    - name: loopback
+      class: "createLoopbackPair()"
+      use: "Integration tests"
+      config: "No server needed"
+
+    - name: mock_signal
+      class: "MockSignalTransport"
+      use: "Development, demos, e2e testing"
+      config:
+        server_url: "ws://localhost:3000"
+        auth_token: "session_token from identity registration"
+      description: >
+        Connects to enhanced toy-signal-cli via WebSocket. Supports
+        encrypted routing, debug mode, sync logging. Behaves like
+        real Signal from the client's perspective.
+
+    - name: websocket
+      class: "WebSocketTransport"
+      use: "Production with real sidecar"
+      config:
+        url: "ws://localhost:PORT"
+
+  switching:
+    description: >
+      Switching between mock and real transport is a config change.
+      The MockSignalTransport and WebSocketTransport implement the
+      same CollaborativeTransport interface. The client SDK does not
+      know which backend it's talking to.
+    env_var: "VITE_E2E_COL_TRANSPORT=deterministic|mock|websocket"
+    code_example: |
+      const transportFactory = createTransportFactory({
+        type: import.meta.env.VITE_E2E_COL_TRANSPORT ?? 'mock',
+        mock: { serverUrl: 'ws://localhost:3000' },
+        websocket: { url: import.meta.env.VITE_E2E_COL_SIDECAR_URL }
+      })
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 11. IMPLEMENTATION PHASES
+# ─────────────────────────────────────────────────────────────────────────────
+
+phases:
+  - id: P1
+    name: "Identity foundation"
+    deliverables:
+      - "@e2e-col/identity package with key generation and storage"
+      - "Enhanced toy-signal-cli identity provider endpoints"
+      - "MockSignalTransport connecting to toy-signal-cli"
+      - "Browser identity registration screen"
+    verification:
+      - "Two browser tabs can register as different identities"
+      - "Public key bundles are exchangeable"
+      - "Safety numbers are deterministic"
+
+  - id: P2
+    name: "Encrypted envelope routing"
+    deliverables:
+      - "Per-recipient envelope encryption in identity package"
+      - "Encrypted routing in toy-signal-cli"
+      - "MockSignalTransport with encryption integration"
+      - "Two-tab demo: encrypted document sync"
+    verification:
+      - "Server cannot see plaintext without debug mode"
+      - "Two identities can edit a shared document"
+      - "Convergence works under mock network conditions"
+
+  - id: P3
+    name: "Document access control"
+    deliverables:
+      - "Membership payload codecs in protocol package"
+      - "Access-control state management in client SDK"
+      - "Invite/share UI in web app"
+      - "Role enforcement (reader cannot edit, non-member rejected)"
+    verification:
+      - "Admin can invite readers and writers"
+      - "Reader cannot make edits"
+      - "Removed participant's subsequent edits are rejected"
+      - "Membership state converges across all participants"
+
+  - id: P4
+    name: "Session model and sync modes"
+    deliverables:
+      - "CollaborativeClient + DocumentSession implementation"
+      - "Auto-sync and manual-sync modes"
+      - "Sync status UI (pending count, transport status)"
+      - "Multi-document support"
+    verification:
+      - "Manual sync batches edits until button press"
+      - "Auto sync sends immediately"
+      - "Multiple documents work independently"
+      - "Session survives browser refresh"
+
+  - id: P5
+    name: "Debug tooling and sync log"
+    deliverables:
+      - "Debug decrypt mode in toy-signal-cli"
+      - "Structured sync log (server + browser)"
+      - "Sync log panel UI in web app"
+      - "Export and filtering capabilities"
+    verification:
+      - "Debug mode shows plaintext of all envelopes"
+      - "Sync log shows wire, envelope, and application events"
+      - "Log export produces valid JSON"
+
+  - id: P6
+    name: "Production readiness path"
+    deliverables:
+      - "Replace toy-signal-cli identity provider with real Signal registration"
+      - "Replace MockSignalTransport with WebSocketTransport to real sidecar"
+      - "Remove debug decrypt capability from production builds"
+      - "Security review of key management and access-control signatures"
+    verification:
+      - "Same web app works with real sidecar (config change only)"
+      - "No mock/debug code in production bundle"
+      - "Keys are never exposed to server in production mode"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 12. INVARIANTS AND CONSTRAINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+invariants:
+  - id: INV-1
+    statement: >
+      Private identity keys MUST be generated in the browser and MUST
+      never be transmitted to any server. The mock server generates its
+      own keypair for its role; the browser generates its own.
+
+  - id: INV-2
+    statement: >
+      The mock server MAY retain private keys for debug decryption, but
+      only when E2E_COL_DEBUG_DECRYPT is set and the build is flagged
+      as development. Production builds MUST NOT include this path.
+
+  - id: INV-3
+    statement: >
+      All membership envelopes (invite, remove, role_change, archive,
+      delete) MUST carry a valid Ed25519 signature from the acting
+      admin's identity key. Recipients MUST reject unsigned or
+      incorrectly signed membership envelopes.
+
+  - id: INV-4
+    statement: >
+      A participant with role 'reader' MUST NOT have their
+      automerge-change envelopes accepted by other participants.
+      This is enforced on the receive path before CRDT application.
+
+  - id: INV-5
+    statement: >
+      The CollaborativeTransport interface MUST NOT change. Both
+      MockSignalTransport and WebSocketTransport implement the same
+      contract. The client SDK MUST NOT import from either directly;
+      it uses the TransportFactory.
+
+  - id: INV-6
+    statement: >
+      Document access-control state MUST converge across all honest
+      participants. Because membership changes are delivered through
+      the same broadcast channel as document edits, and membership
+      envelopes carry cryptographic signatures, convergence follows
+      from the same CRDT-like delivery guarantees.
+
+  - id: INV-7
+    statement: >
+      Removing a participant MUST NOT delete their local copy of the
+      document. Access control is forward-looking: it prevents future
+      edits from being accepted, not past data from existing.
+
+  - id: INV-8
+    statement: >
+      The sync log MUST NOT contain private keys, session tokens, or
+      Signal credentials. In non-debug mode, the log shows envelope
+      metadata only, not payload content.
+
+  - id: INV-9
+    statement: >
+      Switching from mock to real Signal backend MUST require only a
+      configuration change. No application code, protocol format, or
+      storage schema may need modification.
+
+  - id: INV-10
+    statement: >
+      The deterministic transport and loopback transport MUST remain
+      available for unit and integration tests regardless of which
+      production transport is configured.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# APPENDIX A: P7 — EDUCATIONAL SIDECAR UX
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Purpose: The toy sidecar is fundamentally an educational program. Until we
+# plug in the production sidecar, every cryptographic and authentication
+# operation should be visually inspectable. The UI must make the inner
+# workings of the Signal protocol tangible — not as a debugging tool, but
+# as a teaching instrument.
+#
+# Design principle: Every operation that happens inside a real Signal
+# sidecar (key agreement, encryption, signing, chunking, delivery) should
+# have a corresponding visual representation in the toy sidecar UI,
+# annotated with the PURPOSE of that operation as described in the
+# SPRING/EPFL paper and the Signal protocol specification.
+
+appendix_P7:
+  name: "Educational Sidecar UX"
+  status: "NOT_STARTED"
+  priority: "high — this is the primary differentiator of the toy sidecar"
+  depends_on: "P1-P5 must be functionally complete before polishing UX"
+
+  design_philosophy:
+    principle: >
+      The toy sidecar UI is a living diagram of the Signal protocol. Each
+      panel, animation, and annotation maps to a real protocol step. A
+      student watching the UI should be able to answer: "What happens when
+      Alice types a character and presses Enter?" by following the visual
+      flow from CRDT change through encryption, signing, transport, delivery,
+      decryption, verification, and CRDT merge — with each step annotated
+      with its cryptographic purpose.
+
+    paper_alignment: >
+      The SPRING/EPFL paper identifies several distinct operations:
+      (1) document state reconciliation via CRDTs,
+      (2) end-to-end encryption of update envelopes,
+      (3) authenticated broadcast via Signal groups,
+      (4) asynchronous delivery with delayed/duplicate tolerance.
+      The UI must present each of these as a distinct, labeled phase
+      in the data flow, not as an opaque "syncing" indicator.
+
+    production_bridge: >
+      When the production sidecar replaces the toy, the educational UI
+      remains valuable as a protocol walkthrough — it can replay recorded
+      sessions or simulate scenarios without a live Signal connection.
+
+  # ─── UI Architecture ────────────────────────────────────────────────────
+
+  ui_architecture:
+    layout: "Full-page dashboard with a data-flow pipeline as the central metaphor"
+    panels:
+      - name: identity_panel
+        position: "top-left"
+        purpose: "Shows who you are and your cryptographic keys"
+        contents:
+          - "Display name and assigned phone number"
+          - "Identity key fingerprint (truncated hex, clickable for full)"
+          - "Signed prekey fingerprint and expiration status"
+          - "One-time prekey pool count (visual bar: full → depleted)"
+          - "Safety number for each known peer (clickable for comparison)"
+        annotations:
+          - concept: "Identity key"
+            purpose: "Long-term Ed25519 key that authenticates you to peers"
+            paper_ref: "Signal protocol §3.1 — identity keys establish long-term trust"
+          - concept: "Signed prekey"
+            purpose: "Medium-term X25519 key rotated periodically, signed by identity key"
+            paper_ref: "X3DH key agreement — signed prekeys enable asynchronous session setup"
+          - concept: "One-time prekey"
+            purpose: "Ephemeral X25519 key consumed on first message for forward secrecy"
+            paper_ref: "X3DH — one-time prekeys prevent replay of initial key agreement"
+
+      - name: pipeline_panel
+        position: "center"
+        purpose: "Visual data-flow pipeline showing each transformation a message undergoes"
+        flow_steps:
+          - step: 1
+            label: "CRDT Change"
+            visual: "Text diff animation — characters appearing in the editor"
+            annotation: "Automerge produces an operation-aware change set"
+            paper_ref: "§4.1 — strongly convergent client-side reconciliation"
+
+          - step: 2
+            label: "Protocol Envelope"
+            visual: "Structured card showing envelope fields (documentId, messageId, senderId, kind, payload size)"
+            annotation: "The change is wrapped in a versioned, typed envelope with routing metadata"
+
+          - step: 3
+            label: "Signature"
+            visual: "Ed25519 signing animation — identity key icon producing a 64-byte signature"
+            annotation: "The sender signs the envelope metadata to prove authorship"
+            paper_ref: "§5.2 — authenticated update envelopes"
+
+          - step: 4
+            label: "Per-Recipient Encryption"
+            visual: "Fan-out animation — one envelope becoming N encrypted copies, one per recipient"
+            annotation: >
+              For each recipient: ephemeral X25519 ECDH → HKDF-SHA-256 →
+              AES-256-GCM. Each recipient gets their own ciphertext bound to
+              their prekey selector.
+            paper_ref: "§5.3 — recipient-bound encryption prevents group-level key compromise"
+
+          - step: 5
+            label: "Fanout Frame"
+            visual: "Binary frame visualization — magic bytes, version, per-recipient payloads"
+            annotation: "All per-recipient payloads are bundled into a single fanout frame for transport"
+
+          - step: 6
+            label: "Transport"
+            visual: "WebSocket/MockSignal animation — bytes flowing to the server"
+            annotation: "The opaque bytes are delivered to the sidecar for broadcast"
+
+          - step: 7
+            label: "Server Routing"
+            visual: "Server panel showing the frame being delivered to each recipient's SSE stream"
+            annotation: "The sidecar routes the fanout frame to each group member without decrypting"
+
+          - step: 8
+            label: "Decryption"
+            visual: "Reverse of step 4 — recipient's identity key decrypting their designated payload"
+            annotation: "Recipient derives the same shared secret via ECDH and decrypts"
+
+          - step: 9
+            label: "Signature Verification"
+            visual: "Checkmark animation — sender's public identity key verifying the signature"
+            annotation: "Recipient verifies the sender's Ed25519 signature before accepting"
+            paper_ref: "§5.2 — unverified envelopes are rejected before CRDT application"
+
+          - step: 10
+            label: "CRDT Merge"
+            visual: "Text convergence animation — remote changes appearing in the local editor"
+            annotation: "Automerge applies the change; replicas converge regardless of delivery order"
+            paper_ref: "§4.1 — convergence under reordered and duplicate delivery"
+
+        interaction:
+          - "Click any step to expand its annotation panel"
+          - "Hover to see the exact bytes being transformed"
+          - "Play/pause button to step through the pipeline manually"
+          - "Speed slider: instant → slow (educational) → step-by-step"
+
+      - name: group_panel
+        position: "top-right"
+        purpose: "Shows the collaboration group — who can talk to whom"
+        contents:
+          - "Group ID and document ID mapping"
+          - "Member list with roles (admin/writer/reader) and online status"
+          - "Per-member encryption status (last encrypted/decrypted timestamp)"
+          - "Membership change log (invites, removals, role changes)"
+        annotations:
+          - concept: "Group membership"
+            purpose: "Maps to a Signal group; membership changes are signed control envelopes"
+          - concept: "Role enforcement"
+            purpose: "Readers cannot edit; removed participants' edits are rejected"
+
+      - name: sync_log_panel
+        position: "bottom"
+        purpose: "Structured event log — the full audit trail"
+        contents:
+          - "Filterable by level: wire → envelope → application → decrypted"
+          - "Filterable by direction: inbound ↔ outbound"
+          - "Filterable by participant"
+          - "Each entry shows: timestamp, operation, participants, size, crypto details"
+          - "Decrypted payload preview (debug mode only)"
+        interaction:
+          - "Click an entry to jump the pipeline panel to that step"
+          - "Export as JSON for offline analysis"
+
+      - name: transport_panel
+        position: "bottom-right"
+        purpose: "Transport health and delivery guarantees visualization"
+        contents:
+          - "Connection state: online/offline/reconnecting"
+          - "Pending outbound queue depth (bar chart)"
+          - "Delivery metrics: sent, delivered, received, dropped, duplicated"
+          - "Fault injection controls (deterministic transport only)"
+          - "Recovery signal indicator"
+        annotations:
+          - concept: "At-least-once delivery"
+            purpose: "The transport may deliver duplicates; the CRDT layer handles idempotency"
+            paper_ref: "§4.3 — duplicate delivery is harmless under convergent reconciliation"
+
+  # ─── Educational Annotations System ─────────────────────────────────────
+
+  annotations:
+    description: >
+      Every visual element in the UI has an associated annotation that
+      explains its purpose. Annotations are layered: a student can start
+      with high-level descriptions and drill down into cryptographic details.
+
+    levels:
+      - name: beginner
+        content: "Plain-language explanation of what this step does and why"
+        example: "Your message is scrambled so only the recipient can read it"
+
+      - name: intermediate
+        content: "Technical description with algorithm names and parameters"
+        example: "X25519 ECDH derives a shared secret, then AES-256-GCM encrypts the payload"
+
+      - name: expert
+        content: "Exact byte-level specification with wire format references"
+        example: >
+          Ephemeral X25519 public key (32 bytes) || AES-GCM nonce (12 bytes) ||
+          AES-GCM ciphertext (payload + 16-byte auth tag). AAD includes
+          documentId || messageId || senderId || recipientId.
+
+    paper_links:
+      description: >
+        Each annotation can link to the relevant section of the SPRING/EPFL
+        paper or the Signal protocol specification. Links open in a side panel
+        with the paper text and a highlighted passage.
+      sources:
+        - name: "SPRING/EPFL SignalCD Paper"
+          location: "upstream/ (git submodule)"
+          format: "PDF or markdown extraction"
+        - name: "Signal Protocol Specification"
+          location: "https://signal.org/docs/"
+          format: "External link"
+        - name: "X3DH Specification"
+          location: "https://signal.org/docs/specifications/x3dh/"
+          format: "External link"
+        - name: "Double Ratchet Specification"
+          location: "https://signal.org/docs/specifications/doubleratchet/"
+          format: "External link"
+
+  # ─── Scenarios and Walkthroughs ─────────────────────────────────────────
+
+  scenarios:
+    description: >
+      Pre-built educational scenarios that walk through common operations
+      step-by-step. Each scenario is a scripted sequence that highlights
+      specific protocol steps.
+
+    entries:
+      - name: "First Message"
+        description: "Alice registers, creates a document, and sends her first character"
+        steps:
+          - "Alice generates identity keypair (Ed25519)"
+          - "Alice generates signed prekeypair (X25519)"
+          - "Alice generates one-time prekey batch"
+          - "Alice registers with the identity server (public keys only)"
+          - "Alice creates a document (CRDT + initial membership envelope)"
+          - "Alice types 'H' — CRDT change produced"
+          - "Change wrapped in protocol envelope"
+          - "Envelope signed with identity key"
+          - "Envelope encrypted for each recipient (none yet — solo mode)"
+          - "Persisted locally, sent via transport"
+          - "Pipeline shows each step with annotations"
+
+      - name: "Two-Party Key Agreement"
+        description: "Bob joins Alice's document — full X3DH key agreement"
+        steps:
+          - "Alice invites Bob (membership envelope, signed)"
+          - "Bob registers (new identity keypair)"
+          - "Bob fetches Alice's public key bundle"
+          - "Bob computes X3DH shared secret (ephemeral + identity + signed prekey)"
+          - "Bob's first message is encrypted with the derived key"
+          - "Alice receives, derives the same shared secret, decrypts"
+          - "Pipeline highlights the key agreement steps with detailed annotations"
+
+      - name: "Forward Secrecy"
+        description: "Show that compromise of long-term keys doesn't reveal past messages"
+        steps:
+          - "Record a session with several messages"
+          - "Simulate identity key compromise (UI toggle)"
+          - "Show that past messages remain encrypted (one-time prekeys were consumed)"
+          - "Show that future messages are vulnerable (expected behavior)"
+          - "Annotation explains forward secrecy and its limits"
+
+      - name: "Offline Editing and Replay"
+        description: "Alice edits offline, then reconnects and replays"
+        steps:
+          - "Alice goes offline (transport toggle)"
+          - "Alice makes 3 edits — all persisted locally, none sent"
+          - "Alice comes online — outbound queue drains"
+          - "Pipeline shows the replay sequence"
+          - "Bob receives all 3 edits and converges"
+          - "Annotation: durable local-first state + at-least-once delivery"
+
+      - name: "Reordered and Duplicate Delivery"
+        description: "Show that the system tolerates network pathologies"
+        steps:
+          - "Enable fault injection: delay first message, duplicate second"
+          - "Send 3 messages from Alice to Bob"
+          - "Bob receives: msg2, msg2 (dup), msg1 (delayed), msg3"
+          - "Dedup cache rejects the duplicate"
+          - "CRDT applies all 3 in received order — convergence achieved"
+          - "Annotation: convergent reconciliation under arbitrary delivery"
+
+      - name: "Access Control: Removing a Participant"
+        description: "Admin removes a writer; their future edits are rejected"
+        steps:
+          - "Alice (admin) removes Bob (writer)"
+          - "Membership envelope signed by Alice, delivered to all"
+          - "Bob's access state shows 'removed'"
+          - "Bob tries to edit — rejected with 'authorization-denied'"
+          - "Annotation: authenticated access control via signed control envelopes"
+
+  # ─── Visual Design Requirements ─────────────────────────────────────────
+
+  visual_design:
+    style: "Clean, educational, high-contrast — prioritizes clarity over aesthetics"
+    color_coding:
+      - concept: "identity"
+        color: "blue palette"
+        usage: "Identity keys, identity panel, user avatars"
+      - concept: "encryption"
+        color: "green palette"
+        usage: "Encryption steps, ciphertext, shared secrets"
+      - concept: "signature"
+        color: "amber/gold palette"
+        usage: "Signing operations, signature verification"
+      - concept: "transport"
+        color: "purple palette"
+        usage: "Network operations, WebSocket frames, delivery"
+      - concept: "storage"
+        color: "gray palette"
+        usage: "Persistence operations, IndexedDB, outbound queue"
+      - concept: "error/rejection"
+        color: "red palette"
+        usage: "Failed verification, rejected edits, authorization denied"
+
+    animations:
+      - "CRDT change: character-by-character typing animation"
+      - "Encryption: envelope fading into ciphertext blocks"
+      - "Signing: key icon producing a signature blob"
+      - "Transport: bytes flowing along a wire/connection line"
+      - "Decryption: ciphertext blocks revealing the envelope"
+      - "Verification: signature checkmark/x-mark animation"
+      - "Convergence: text fragments assembling into the final document"
+
+    typography:
+      - "Monospace for cryptographic material (fingerprints, keys, hex)"
+      - "Sans-serif for annotations and explanations"
+      - "Code font for wire format specifications"
+
+  # ─── Implementation Plan ────────────────────────────────────────────────
+
+  implementation:
+    - id: P7.1
+      name: "Pipeline visualization framework"
+      deliverables:
+        - "Data-flow pipeline component with 10 steps"
+        - "Step annotation system with beginner/intermediate/expert levels"
+        - "Play/pause/step-through controls"
+        - "Click-to-expand annotation panels"
+      depends_on: "P5 (sync log infrastructure)"
+
+    - id: P7.2
+      name: "Identity and key visualization"
+      deliverables:
+        - "Identity panel with key fingerprints"
+        - "One-time prekey pool visualization"
+        - "Safety number comparison UI"
+        - "Per-recipient encryption fan-out visualization"
+      depends_on: "P1 (identity infrastructure)"
+
+    - id: P7.3
+      name: "Group and access control visualization"
+      deliverables:
+        - "Group panel with member list and roles"
+        - "Membership change log"
+        - "Role enforcement indicator"
+        - "Remove/invite animation"
+      depends_on: "P3 (access control)"
+
+    - id: P7.4
+      name: "Transport and delivery visualization"
+      deliverables:
+        - "Transport health panel"
+        - "Queue depth chart"
+        - "Delivery metrics"
+        - "Fault injection controls (deterministic transport)"
+      depends_on: "P4 (session model)"
+
+    - id: P7.5
+      name: "Educational scenarios"
+      deliverables:
+        - "Pre-built scenario runner"
+        - "All 6 scenarios from the spec"
+        - "Paper link integration"
+        - "Scenario recording and playback"
+      depends_on: "P7.1-P7.4"
+
+    - id: P7.6
+      name: "Production bridge"
+      deliverables:
+        - "Recorded session replay mode (no live sidecar needed)"
+        - "Protocol simulation mode (deterministic, no network)"
+        - "Export/import scenario definitions"
+      depends_on: "P7.5"
+
+  invariants:
+    - id: P7-INV-1
+      statement: >
+        Every visual step in the pipeline MUST map to a real protocol operation.
+        No decorative animations that don't correspond to actual data transformations.
+
+    - id: P7-INV-2
+      statement: >
+        Annotations MUST be factually correct and cite the relevant protocol
+        specification or paper section. Incorrect explanations are worse than
+        no explanations.
+
+    - id: P7-INV-3
+      statement: >
+        The educational UI MUST NOT interfere with the normal operation of the
+        editor. Pipeline visualization is observational only — it reads events
+        but does not modify the data path.
+
+    - id: P7-INV-4
+      statement: >
+        The production sidecar swap MUST NOT require removing the educational
+        UI. The UI can operate in replay/simulation mode when no toy sidecar
+        is available.
+
+    - id: P7-INV-5
+      statement: >
+        Cryptographic material displayed in the UI (fingerprints, key bytes)
+        MUST be read-only presentation. The UI MUST NOT provide copy-to-clipboard
+        for private keys or session tokens.

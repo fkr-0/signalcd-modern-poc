@@ -4,10 +4,12 @@ import { ToySignalCliServer } from './server'
 const port = Number(process.env.TOY_SIGNAL_CLI_PORT ?? 18080)
 if (!Number.isSafeInteger(port) || port < 0 || port > 65535)
   throw new Error('TOY_SIGNAL_CLI_PORT must be a valid TCP port')
+const debugDecrypt = process.env.E2E_COL_DEBUG_DECRYPT === 'true'
 
 const server = new ToySignalCliServer({
   host: process.env.TOY_SIGNAL_CLI_HOST ?? '127.0.0.1',
   port,
+  debugDecrypt,
   ...(process.env.TOY_SIGNAL_CLI_FIXED_ACCOUNT
     ? { fixedAccount: process.env.TOY_SIGNAL_CLI_FIXED_ACCOUNT }
     : {})
@@ -15,11 +17,12 @@ const server = new ToySignalCliServer({
 
 const address = await server.start()
 console.log(`toy signal-cli listening on ${address.baseUrl}`)
+if (debugDecrypt) console.warn('⚠ DEBUG DECRYPT MODE ACTIVE — do not use in production')
 console.log(`demo accounts: ${DEFAULT_TOY_ACCOUNT_A}, ${DEFAULT_TOY_ACCOUNT_B}`)
 console.log(`demo group: ${DEFAULT_TOY_GROUP_ID}`)
 console.log('contract: /__toy__/v1/contract')
 console.log('mock identity: /api/v1/identity/register, /session, /keys/:phone_number')
-console.log('test controls: /__toy__/v1/state, /reset, /faults, /inject')
+console.log('test controls: /__toy__/v1/state, /reset, /faults, /inject, /config, /sync-log')
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => void server.stop().finally(() => process.exit(0)))

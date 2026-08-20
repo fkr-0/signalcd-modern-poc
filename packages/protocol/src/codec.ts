@@ -28,7 +28,7 @@ const CODE_TO_KIND = new Map<number, EnvelopeKind>(
 const encoder = new TextEncoder()
 const decoder = new TextDecoder('utf-8', { fatal: true })
 
-class Writer {
+export class Writer {
   private readonly chunks: Uint8Array[] = []
   private length = 0
 
@@ -85,7 +85,7 @@ class Writer {
   }
 }
 
-class Reader {
+export class Reader {
   private offset = 0
 
   constructor(private readonly bytes: Uint8Array) {}

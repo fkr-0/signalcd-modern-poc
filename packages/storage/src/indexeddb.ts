@@ -1,21 +1,36 @@
+import type { DocumentAccessState } from '@e2e-col/protocol'
 import {
-  type CollaborativeStorage,
+  type CheckpointPolicy,
+  cloneAccessState,
   cloneDocument,
   cloneOutbound,
+  type DurableCollaborativeStorage,
   type OutboundRecord,
+  type SeenMessage,
   type StoredDocument
 } from './storage'
 
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 const DOCUMENTS = 'documents'
 const OUTBOUND = 'outbound'
+const ACCESS_CONTROL = 'access_control'
+const SEEN = 'seen_messages'
+
+interface StoredAccessControl {
+  readonly documentId: string
+  readonly state: DocumentAccessState
+}
+
+interface StoredSeenMessage extends SeenMessage {
+  readonly key: string
+}
 
 export interface IndexedDbStorageOptions {
   readonly name?: string
   readonly indexedDB?: IDBFactory
 }
 
-export class IndexedDbCollaborativeStorage implements CollaborativeStorage {
+export class IndexedDbCollaborativeStorage implements DurableCollaborativeStorage {
   private readonly dbPromise: Promise<IDBDatabase>
 
   constructor(options: IndexedDbStorageOptions = {}) {
@@ -40,8 +55,9 @@ export class IndexedDbCollaborativeStorage implements CollaborativeStorage {
 
   async deleteDocument(documentId: string): Promise<void> {
     const db = await this.dbPromise
-    const tx = db.transaction(DOCUMENTS, 'readwrite')
+    const tx = db.transaction([DOCUMENTS, ACCESS_CONTROL], 'readwrite')
     tx.objectStore(DOCUMENTS).delete(documentId)
+    tx.objectStore(ACCESS_CONTROL).delete(documentId)
     await complete(tx)
   }
 
@@ -76,6 +92,116 @@ export class IndexedDbCollaborativeStorage implements CollaborativeStorage {
     await complete(tx)
   }
 
+  async loadAccessControl(documentId: string): Promise<DocumentAccessState | undefined> {
+    const value = await request<StoredAccessControl | undefined>(
+      (await this.dbPromise).transaction(ACCESS_CONTROL).objectStore(ACCESS_CONTROL).get(documentId)
+    )
+    return value ? cloneAccessState(value.state) : undefined
+  }
+
+  async saveAccessControl(documentId: string, state: DocumentAccessState): Promise<void> {
+    const db = await this.dbPromise
+    const tx = db.transaction(ACCESS_CONTROL, 'readwrite')
+    tx.objectStore(ACCESS_CONTROL).put({ documentId, state: cloneAccessState(state) })
+    await complete(tx)
+  }
+
+  async commitLocalChange(input: {
+    document: StoredDocument
+    outbound: readonly OutboundRecord[]
+  }): Promise<void> {
+    const db = await this.dbPromise
+    const tx = db.transaction([DOCUMENTS, OUTBOUND], 'readwrite')
+    tx.objectStore(DOCUMENTS).put(cloneDocument(input.document))
+    const outbound = tx.objectStore(OUTBOUND)
+    for (const record of input.outbound) outbound.put(cloneOutbound(record))
+    await complete(tx)
+  }
+
+  async persistRemoteState(input: {
+    document: StoredDocument
+    seen: readonly SeenMessage[]
+  }): Promise<void> {
+    const db = await this.dbPromise
+    const tx = db.transaction([DOCUMENTS, SEEN], 'readwrite')
+    tx.objectStore(DOCUMENTS).put(cloneDocument(input.document))
+    const seen = tx.objectStore(SEEN)
+    for (const value of input.seen) {
+      const stored: StoredSeenMessage = {
+        ...value,
+        key: seenKey(value.documentId, value.messageId)
+      }
+      seen.put(stored)
+    }
+    await complete(tx)
+  }
+
+  async commitAccessChange(input: {
+    documentId: string
+    access: DocumentAccessState
+    outbound: readonly OutboundRecord[]
+    seen?: readonly SeenMessage[]
+  }): Promise<void> {
+    const db = await this.dbPromise
+    const tx = db.transaction([ACCESS_CONTROL, OUTBOUND, SEEN], 'readwrite')
+    tx.objectStore(ACCESS_CONTROL).put({
+      documentId: input.documentId,
+      state: cloneAccessState(input.access)
+    })
+    const outbound = tx.objectStore(OUTBOUND)
+    for (const record of input.outbound) outbound.put(cloneOutbound(record))
+    const seen = tx.objectStore(SEEN)
+    for (const value of input.seen ?? []) {
+      const stored: StoredSeenMessage = {
+        ...value,
+        key: seenKey(value.documentId, value.messageId)
+      }
+      seen.put(stored)
+    }
+    await complete(tx)
+  }
+
+  async markOutboundAttempt(recordIds: readonly string[], attemptedAt: number): Promise<void> {
+    if (recordIds.length === 0) return
+    const db = await this.dbPromise
+    const tx = db.transaction(OUTBOUND, 'readwrite')
+    const store = tx.objectStore(OUTBOUND)
+    for (const id of recordIds) {
+      const current = await request<OutboundRecord | undefined>(store.get(id))
+      if (!current) continue
+      store.put({
+        ...cloneOutbound(current),
+        state: 'attempted',
+        attempts: (current.attempts ?? 0) + 1,
+        lastAttemptAt: attemptedAt
+      })
+    }
+    await complete(tx)
+  }
+
+  async compactOutbound(documentId: string, policy: CheckpointPolicy): Promise<void> {
+    const db = await this.dbPromise
+    const tx = db.transaction(OUTBOUND, 'readwrite')
+    const store = tx.objectStore(OUTBOUND)
+    const records = (await request<OutboundRecord[]>(store.getAll()))
+      .filter((record) => record.documentId === documentId)
+      .sort((a, b) => a.createdAt - b.createdAt)
+    const keep = new Set(
+      records.slice(-Math.max(0, policy.retainAtLeast ?? 0)).map((record) => record.id)
+    )
+    const safe = new Set(policy.safeRecordIds)
+    for (const record of records)
+      if (safe.has(record.id) && !keep.has(record.id)) store.delete(record.id)
+    await complete(tx)
+  }
+
+  async hasSeen(documentId: string, messageId: string): Promise<boolean> {
+    const value = await request<StoredSeenMessage | undefined>(
+      (await this.dbPromise).transaction(SEEN).objectStore(SEEN).get(seenKey(documentId, messageId))
+    )
+    return value !== undefined
+  }
+
   async close(): Promise<void> {
     ;(await this.dbPromise).close()
   }
@@ -83,15 +209,18 @@ export class IndexedDbCollaborativeStorage implements CollaborativeStorage {
 
 function openDatabase(factory: IDBFactory, name: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = factory.open(name, SCHEMA_VERSION)
-    request.onupgradeneeded = () => {
-      const db = request.result
+    const openRequest = factory.open(name, SCHEMA_VERSION)
+    openRequest.onupgradeneeded = () => {
+      const db = openRequest.result
       if (!db.objectStoreNames.contains(DOCUMENTS))
         db.createObjectStore(DOCUMENTS, { keyPath: 'documentId' })
       if (!db.objectStoreNames.contains(OUTBOUND)) db.createObjectStore(OUTBOUND, { keyPath: 'id' })
+      if (!db.objectStoreNames.contains(ACCESS_CONTROL))
+        db.createObjectStore(ACCESS_CONTROL, { keyPath: 'documentId' })
+      if (!db.objectStoreNames.contains(SEEN)) db.createObjectStore(SEEN, { keyPath: 'key' })
     }
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error ?? new Error('IndexedDB open failed'))
+    openRequest.onsuccess = () => resolve(openRequest.result)
+    openRequest.onerror = () => reject(openRequest.error ?? new Error('IndexedDB open failed'))
   })
 }
 
@@ -108,4 +237,8 @@ function complete(tx: IDBTransaction): Promise<void> {
     tx.onerror = () => reject(tx.error ?? new Error('IndexedDB transaction failed'))
     tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'))
   })
+}
+
+function seenKey(documentId: string, messageId: string): string {
+  return `${documentId}\u0000${messageId}`
 }

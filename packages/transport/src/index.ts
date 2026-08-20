@@ -4,8 +4,26 @@ export type {
   ReleaseHeldOptions
 } from './deterministic-network'
 export { DeterministicTransportNetwork, SimulatedTransport } from './deterministic-network'
+export type {
+  MockTransportRuntime,
+  TransportFactory,
+  TransportFactoryConfig,
+  TransportFactoryContext
+} from './factory'
+export { createTransportFactory } from './factory'
 export type { LoopbackPair } from './loopback'
 export { createLoopbackPair } from './loopback'
+export type {
+  MockSignalFanoutFrame,
+  MockSignalFanoutRecipient,
+  MockSignalGroupMember,
+  MockSignalTransportOptions
+} from './mock-signal-transport'
+export {
+  decodeMockSignalFanoutFrame,
+  encodeMockSignalFanoutFrame,
+  MockSignalTransport
+} from './mock-signal-transport'
 export type {
   CollaborativeTransport,
   ObservableCollaborativeTransport,

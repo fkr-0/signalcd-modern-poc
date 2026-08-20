@@ -1,5 +1,7 @@
 export * from './client'
 export * from './encoding'
+export * from './encryption'
 export * from './provider'
 export * from './storage'
+export * from './sync-log'
 export * from './types'

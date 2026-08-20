@@ -1,7 +1,7 @@
 {
   "name": "@e2e-col/web",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.0.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,6 +9,7 @@
     "typecheck": "tsc -b"
   },
   "dependencies": {
+    "@e2e-col/client": "workspace:*",
     "@e2e-col/core": "workspace:*",
     "@e2e-col/identity": "workspace:*",
     "@e2e-col/protocol": "workspace:*",

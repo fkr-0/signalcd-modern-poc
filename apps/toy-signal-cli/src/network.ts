@@ -117,6 +117,25 @@ export class ToySignalNetwork {
     return { ...this.faults }
   }
 
+  consumeSendFailure(): boolean {
+    if (this.faults.failNextRpcSends < 1) return false
+    this.faults.failNextRpcSends -= 1
+    return true
+  }
+
+  async deliverWithFaults(deliver: () => void): Promise<number> {
+    if (this.faults.dropNextDeliveries > 0) {
+      this.faults.dropNextDeliveries -= 1
+      return 0
+    }
+    const copies = this.faults.duplicateNextDeliveries > 0 ? 2 : 1
+    if (copies === 2) this.faults.duplicateNextDeliveries -= 1
+    if (this.faults.deliveryDelayMs > 0)
+      await new Promise((resolve) => setTimeout(resolve, this.faults.deliveryDelayMs))
+    for (let copy = 0; copy < copies; copy += 1) deliver()
+    return copies
+  }
+
   view(): ToySignalStateView {
     return {
       contractVersion: 1,
@@ -296,8 +315,7 @@ export class ToySignalNetwork {
     sender: AccountState,
     params: Readonly<Record<string, unknown>>
   ): Promise<{ timestamp: number }> {
-    if (this.faults.failNextRpcSends > 0) {
-      this.faults.failNextRpcSends -= 1
+    if (this.consumeSendFailure()) {
       throw new ToyRpcError(-32000, 'toy injected send failure')
     }
     const message = requiredString(params.message, 'message')
@@ -471,20 +489,12 @@ export class ToySignalNetwork {
   }
 
   private async emitReceive(account: string, envelope: Record<string, unknown>): Promise<void> {
-    if (this.faults.dropNextDeliveries > 0) {
-      this.faults.dropNextDeliveries -= 1
-      return
-    }
     const notification = {
       jsonrpc: '2.0',
       method: 'receive',
       params: { account, envelope }
     }
-    const copies = this.faults.duplicateNextDeliveries > 0 ? 2 : 1
-    if (copies === 2) this.faults.duplicateNextDeliveries -= 1
-    if (this.faults.deliveryDelayMs > 0)
-      await new Promise((resolve) => setTimeout(resolve, this.faults.deliveryDelayMs))
-    for (let copy = 0; copy < copies; copy += 1) this.broadcast(notification)
+    await this.deliverWithFaults(() => this.broadcast(notification))
     if (this.faults.closeSseAfterNextDelivery) {
       this.faults.closeSseAfterNextDelivery = false
       this.closeSseClients()

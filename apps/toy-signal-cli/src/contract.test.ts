@@ -42,7 +42,14 @@ describe('toy signal-cli HTTP/JSON-RPC contract', () => {
     const baseUrl = await start()
     const check = await fetch(`${baseUrl}/api/v1/check`)
     expect(check.status).toBe(200)
-    expect(await check.json()).toEqual({ ok: true, toy: true, contractVersion: 1 })
+    expect(await check.json()).toEqual({
+      status: 'ok',
+      toy: true,
+      apiVersion: 1,
+      debugDecrypt: false,
+      registeredIdentities: 0,
+      activeGroups: 0
+    })
 
     const contract = await fetch(`${baseUrl}/__toy__/v1/contract`).then((response) =>
       response.json()

@@ -1,10 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { WebSocketServer } from 'ws'
 import {
   DEFAULT_TOY_SIGNAL_CONFIG,
   type JsonRpcFailure,
   type JsonRpcId,
   type JsonRpcRequest,
   type JsonRpcResponse,
+  MOCK_GROUP_ENDPOINTS,
   MOCK_IDENTITY_ENDPOINTS,
   SIGNAL_CLI_HTTP_ENDPOINTS,
   SUPPORTED_RPC_METHODS,
@@ -14,12 +16,15 @@ import {
   type ToyInjectRequest,
   type ToySignalConfig
 } from './contract'
+import { type DebugEnvelopeDecryptor, EncryptedMessageRouter } from './encrypted-router'
+import { CollaborationGroupRegistry, GroupApiError } from './group-registry'
 import {
   IdentityApiError,
   type IdentityRegistrationRequest,
   IdentityRegistry
 } from './identity-registry'
 import { ToyRpcError, ToySignalNetwork } from './network'
+import { SyncEventLog } from './sync-log'
 
 const MAX_BODY_BYTES = 1024 * 1024
 
@@ -29,15 +34,21 @@ export interface ToySignalCliServerOptions {
   readonly fixedAccount?: string
   readonly config?: ToySignalConfig
   readonly now?: () => number
+  readonly debugDecrypt?: boolean
+  readonly debugEnvelopeDecryptor?: DebugEnvelopeDecryptor
 }
 
 export class ToySignalCliServer {
   readonly network: ToySignalNetwork
   readonly identities: IdentityRegistry
+  readonly groups: CollaborationGroupRegistry
+  readonly syncLog: SyncEventLog
   private readonly host: string
   private readonly port: number
   private readonly fixedAccount: string | undefined
   private server: Server | undefined
+  private sockets: WebSocketServer | undefined
+  private readonly encryptedMessages: EncryptedMessageRouter
 
   constructor(options: ToySignalCliServerOptions = {}) {
     this.host = options.host ?? '127.0.0.1'
@@ -49,16 +60,62 @@ export class ToySignalCliServer {
       options.now,
       (options.config ?? DEFAULT_TOY_SIGNAL_CONFIG).accounts.map((account) => account.account)
     )
+    this.groups = new CollaborationGroupRegistry(this.identities, options.now)
+    this.syncLog = new SyncEventLog(options.now)
+    this.encryptedMessages = new EncryptedMessageRouter(
+      this.identities,
+      this.groups,
+      this.network,
+      options.now,
+      this.syncLog,
+      options.debugEnvelopeDecryptor,
+      options.debugDecrypt ?? process.env.E2E_COL_DEBUG_DECRYPT === 'true'
+    )
+  }
+
+  private openSyncLog(request: IncomingMessage, response: ServerResponse): void {
+    response.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive'
+    })
+    response.flushHeaders()
+    for (const entry of this.syncLog.all()) response.write(`data: ${JSON.stringify(entry)}\n\n`)
+    const detach = this.syncLog.subscribe((entry) => {
+      if (!response.destroyed) response.write(`data: ${JSON.stringify(entry)}\n\n`)
+    })
+    request.once('close', detach)
+    response.once('close', detach)
+  }
+
+  get debugDecrypt(): boolean {
+    return this.encryptedMessages.getDebugDecrypt()
   }
 
   async start(): Promise<{ host: string; port: number; baseUrl: string }> {
     if (this.server) throw new Error('toy signal-cli is already running')
     const server = createServer((request, response) => void this.route(request, response))
+    const sockets = new WebSocketServer({ noServer: true })
+    server.on('upgrade', (request, socket, head) => {
+      const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`)
+      if (
+        url.pathname !== MOCK_GROUP_ENDPOINTS.messages ||
+        !originAllowed(request.headers.origin)
+      ) {
+        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
+        socket.destroy()
+        return
+      }
+      sockets.handleUpgrade(request, socket, head, (client) =>
+        this.encryptedMessages.attach(client)
+      )
+    })
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject)
       server.listen(this.port, this.host, resolve)
     })
     this.server = server
+    this.sockets = sockets
     const address = server.address()
     if (!address || typeof address === 'string')
       throw new Error('toy signal-cli did not obtain a TCP address')
@@ -67,6 +124,9 @@ export class ToySignalCliServer {
 
   async stop(): Promise<void> {
     this.network.closeSseClients()
+    this.encryptedMessages.reset()
+    this.sockets?.close()
+    this.sockets = undefined
     if (!this.server) return
     const server = this.server
     this.server = undefined
@@ -87,8 +147,7 @@ export class ToySignalCliServer {
         return
       }
       if (request.method === 'GET' && url.pathname === SIGNAL_CLI_HTTP_ENDPOINTS.check) {
-        response.writeHead(200, { 'content-type': 'application/json' })
-        response.end(JSON.stringify({ ok: true, toy: true, contractVersion: 1 }))
+        json(response, 200, this.healthView())
         return
       }
       if (request.method === 'GET' && url.pathname === SIGNAL_CLI_HTTP_ENDPOINTS.events) {
@@ -104,7 +163,28 @@ export class ToySignalCliServer {
         return
       }
       if (request.method === 'GET' && url.pathname === TOY_CONTROL_ENDPOINTS.state) {
-        json(response, 200, { ...this.network.view(), identity: this.identities.view() })
+        json(response, 200, this.stateView())
+        return
+      }
+      if (request.method === 'POST' && url.pathname === TOY_CONTROL_ENDPOINTS.config) {
+        const value = await readJson(request)
+        if (!isRecord(value) || typeof value.debugDecrypt !== 'boolean')
+          throw new Error('debugDecrypt must be a boolean')
+        this.encryptedMessages.setDebugDecrypt(value.debugDecrypt)
+        json(response, 200, { debugDecrypt: this.debugDecrypt })
+        return
+      }
+      if (request.method === 'GET' && url.pathname === TOY_CONTROL_ENDPOINTS.syncLogExport) {
+        json(response, 200, this.syncLog.all())
+        return
+      }
+      if (request.method === 'GET' && url.pathname === TOY_CONTROL_ENDPOINTS.syncLog) {
+        if (url.searchParams.has('since')) {
+          const since = Number(url.searchParams.get('since'))
+          json(response, 200, this.syncLog.since(since))
+        } else {
+          this.openSyncLog(request, response)
+        }
         return
       }
       if (request.method === 'POST' && url.pathname === TOY_CONTROL_ENDPOINTS.reset) {
@@ -113,7 +193,10 @@ export class ToySignalCliServer {
         const effectiveConfig = config ?? DEFAULT_TOY_SIGNAL_CONFIG
         this.network.reset(effectiveConfig)
         this.identities.reset(effectiveConfig.accounts.map((account) => account.account))
-        json(response, 200, { ...this.network.view(), identity: this.identities.view() })
+        this.groups.reset()
+        this.encryptedMessages.reset()
+        this.syncLog.reset()
+        json(response, 200, this.stateView())
         return
       }
       if (request.method === 'POST' && url.pathname === TOY_CONTROL_ENDPOINTS.faults) {
@@ -156,15 +239,57 @@ export class ToySignalCliServer {
         json(response, 200, this.identities.lookup(phoneNumber, request.headers.authorization))
         return
       }
+      if (request.method === 'POST' && url.pathname === MOCK_GROUP_ENDPOINTS.groups) {
+        const caller = this.identities.authenticate(request.headers.authorization)
+        const value = await readJson(request)
+        const group = this.groups.create(caller, isRecord(value) ? value : {})
+        this.logApplicationAccess(caller.phoneNumber, group.document_id, 'membership')
+        json(response, 201, group)
+        return
+      }
+      if (request.method === 'GET' && url.pathname === MOCK_GROUP_ENDPOINTS.groups) {
+        const caller = this.identities.authenticate(request.headers.authorization)
+        json(response, 200, { groups: this.groups.list(caller) })
+        return
+      }
+      const groupRoute = parseGroupRoute(url.pathname)
+      if (groupRoute) {
+        const caller = this.identities.authenticate(request.headers.authorization)
+        if (request.method === 'GET' && groupRoute.kind === 'group') {
+          json(response, 200, this.groups.get(groupRoute.groupId, caller))
+          return
+        }
+        if (request.method === 'POST' && groupRoute.kind === 'members') {
+          const value = await readJson(request)
+          const group = this.groups.addMember(
+            groupRoute.groupId,
+            caller,
+            isRecord(value) ? value : {}
+          )
+          this.logApplicationAccess(caller.phoneNumber, group.document_id, 'membership')
+          json(response, 200, group)
+          return
+        }
+        if (request.method === 'DELETE' && groupRoute.kind === 'member') {
+          const group = this.groups.removeMember(groupRoute.groupId, groupRoute.phoneNumber, caller)
+          this.logApplicationAccess(caller.phoneNumber, group.document_id, 'membership')
+          json(response, 200, group)
+          return
+        }
+      }
       response.writeHead(404).end()
     } catch (error) {
       if (response.headersSent) {
         response.end()
         return
       }
-      json(response, error instanceof IdentityApiError ? error.status : 400, {
-        error: error instanceof Error ? error.message : 'bad request'
-      })
+      json(
+        response,
+        error instanceof IdentityApiError || error instanceof GroupApiError ? error.status : 400,
+        {
+          error: error instanceof Error ? error.message : 'bad request'
+        }
+      )
     }
   }
 
@@ -226,6 +351,42 @@ export class ToySignalCliServer {
         return failure(request.id ?? null, error.code, error.message, error.data)
       return failure(request.id ?? null, -32603, 'Internal error')
     }
+  }
+
+  private stateView(): Record<string, unknown> {
+    return {
+      ...this.network.view(),
+      identity: this.identities.view(),
+      collaboration: {
+        groups: this.groups.view(),
+        ...this.encryptedMessages.view()
+      }
+    }
+  }
+
+  private healthView(): Record<string, unknown> {
+    return {
+      status: 'ok',
+      toy: true,
+      apiVersion: 1,
+      debugDecrypt: this.debugDecrypt,
+      registeredIdentities: this.identities.view().registered,
+      activeGroups: this.groups.view().length
+    }
+  }
+
+  private logApplicationAccess(
+    senderPhone: string,
+    documentId: string,
+    envelopeKind: string
+  ): void {
+    this.syncLog.append({
+      level: 'application',
+      direction: 'inbound',
+      senderPhone,
+      documentId,
+      envelopeKind
+    })
   }
 }
 
@@ -309,8 +470,37 @@ export const toySignalCliContract = {
   endpoints: SIGNAL_CLI_HTTP_ENDPOINTS,
   controls: TOY_CONTROL_ENDPOINTS,
   identity: MOCK_IDENTITY_ENDPOINTS,
+  collaboration: MOCK_GROUP_ENDPOINTS,
   methods: SUPPORTED_RPC_METHODS
 } as const
+
+function parseGroupRoute(
+  pathname: string
+):
+  | { kind: 'group'; groupId: string }
+  | { kind: 'members'; groupId: string }
+  | { kind: 'member'; groupId: string; phoneNumber: string }
+  | undefined {
+  const prefix = `${MOCK_GROUP_ENDPOINTS.groups}/`
+  if (!pathname.startsWith(prefix)) return undefined
+  const parts = pathname.slice(prefix.length).split('/').map(decodeURIComponent)
+  if (parts.length === 1 && parts[0]) return { kind: 'group', groupId: parts[0] }
+  if (parts.length === 2 && parts[0] && parts[1] === 'members')
+    return { kind: 'members', groupId: parts[0] }
+  if (parts.length === 3 && parts[0] && parts[1] === 'members' && parts[2])
+    return { kind: 'member', groupId: parts[0], phoneNumber: parts[2] }
+  return undefined
+}
+
+function originAllowed(origin: string | undefined): boolean {
+  if (!origin) return true
+  try {
+    const parsed = new URL(origin)
+    return ['http:', 'https:'].includes(parsed.protocol) && isLoopbackHostname(parsed.hostname)
+  } catch {
+    return false
+  }
+}
 
 function applyCors(request: IncomingMessage, response: ServerResponse): boolean {
   const origin = request.headers.origin

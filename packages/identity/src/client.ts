@@ -1,12 +1,19 @@
 import {
+  decodeEncryptedEnvelope,
+  type EncryptedEnvelope,
+  type ProtocolEnvelope
+} from '@e2e-col/protocol'
+import {
   base64ToBytes,
   bytesToBase64,
   exportRawKey,
   importEd25519Public,
   importX25519Public
 } from './encoding'
+import { decryptProtocolEnvelope, encryptProtocolEnvelope } from './encryption'
 import type {
   IdentityProvider,
+  IdentityRecipient,
   IdentityStorage,
   OneTimePrekey,
   RemoteIdentity,
@@ -26,6 +33,31 @@ export class IdentityClient {
 
   constructor(private readonly options: IdentityClientOptions) {
     this.now = options.now ?? Date.now
+  }
+
+  async encryptEnvelopeForRecipient(
+    envelope: ProtocolEnvelope,
+    recipient: IdentityRecipient,
+    localIdentity: UserIdentity
+  ): Promise<EncryptedEnvelope> {
+    const remote = await this.fetchRemoteIdentity(recipient.phoneNumber, localIdentity)
+    return encryptProtocolEnvelope(envelope, localIdentity, recipient, remote)
+  }
+
+  async decryptEnvelope(
+    value: Uint8Array | EncryptedEnvelope,
+    localIdentity: UserIdentity
+  ): Promise<ProtocolEnvelope> {
+    const encrypted = value instanceof Uint8Array ? decodeEncryptedEnvelope(value) : value
+    if (
+      encrypted.recipientId !== localIdentity.userId ||
+      encrypted.recipientPhoneNumber !== localIdentity.phoneNumber
+    )
+      throw new Error('encrypted envelope is bound to a different recipient identity')
+    let sender = await this.options.storage.loadRemoteIdentity(encrypted.senderId)
+    if (!sender || sender.phoneNumber !== encrypted.senderPhoneNumber)
+      sender = await this.fetchRemoteIdentity(encrypted.senderPhoneNumber, localIdentity)
+    return decryptProtocolEnvelope(encrypted, localIdentity, sender)
   }
 
   async register(displayName: string): Promise<UserIdentity> {

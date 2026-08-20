@@ -3,7 +3,12 @@ import {
   chunkEnvelope,
   createEnvelope,
   DedupCache,
+  decodeEncryptedEnvelope,
   decodeEnvelope,
+  encodeEncryptedEnvelope,
+  encodeEncryptedEnvelopeAad,
+  encodeEncryptedEnvelopeKdfInfo,
+  encodeEncryptedEnvelopeSignatureInput,
   encodeEnvelope,
   isSupportedProtocolVersion,
   PROTOCOL_VERSION,
@@ -73,6 +78,54 @@ describe('protocol envelope', () => {
     const trailing = new Uint8Array(encoded.byteLength + 1)
     trailing.set(encoded)
     expect(() => decodeEnvelope(trailing)).toThrow(/trailing bytes/)
+  })
+})
+
+describe('encrypted envelope wrapper', () => {
+  const encrypted = {
+    version: PROTOCOL_VERSION,
+    documentId,
+    messageId,
+    senderId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    senderPhoneNumber: '+15550000001',
+    recipientId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    recipientPhoneNumber: '+15550000002',
+    recipientPrekeyKind: 'one-time' as const,
+    recipientKeySelector: '11'.repeat(32),
+    ephemeralPublic: new Uint8Array(32).fill(0x22),
+    nonce: new Uint8Array(12).fill(0x33),
+    ciphertext: new Uint8Array([0x44, ...new Uint8Array(15).fill(0x45)]),
+    signature: new Uint8Array(64).fill(0x55)
+  }
+
+  it('round-trips a canonical recipient-bound encrypted wrapper without aliasing', () => {
+    const decoded = decodeEncryptedEnvelope(encodeEncryptedEnvelope(encrypted))
+    expect(decoded).toEqual(encrypted)
+    expect(decoded.ciphertext).not.toBe(encrypted.ciphertext)
+    expect(decoded.ephemeralPublic).not.toBe(encrypted.ephemeralPublic)
+  })
+
+  it('keeps canonical AAD, KDF and signature domains distinct and stable', () => {
+    const aad = encodeEncryptedEnvelopeAad(encrypted)
+    const kdf = encodeEncryptedEnvelopeKdfInfo(encrypted)
+    const signature = encodeEncryptedEnvelopeSignatureInput(encrypted)
+    expect(new TextDecoder().decode(aad.slice(0, 4))).toBe('E2EA')
+    expect(new TextDecoder().decode(kdf.slice(0, 4))).toBe('E2EK')
+    expect(new TextDecoder().decode(signature.slice(0, 4))).toBe('E2ES')
+    expect(Array.from(aad)).not.toEqual(Array.from(kdf))
+    expect(signature.byteLength).toBe(aad.byteLength + 4 + encrypted.ciphertext.byteLength)
+  })
+
+  it('rejects malformed recipient bindings and encrypted-frame corruption', () => {
+    expect(() => encodeEncryptedEnvelope({ ...encrypted, recipientId: 'not-a-uuid' })).toThrow(
+      /recipientId/
+    )
+    expect(() => encodeEncryptedEnvelope({ ...encrypted, recipientKeySelector: 'ABC' })).toThrow(
+      /recipientKeySelector/
+    )
+    const encoded = encodeEncryptedEnvelope(encrypted)
+    encoded[0] = encoded[0]! ^ 0xff
+    expect(() => decodeEncryptedEnvelope(encoded)).toThrow(/magic/)
   })
 })
 

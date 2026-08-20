@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
-## [Unreleased]
+## [0.0.2] - 2026-08-20
 
 ### Added
 
@@ -19,14 +19,65 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
   public prekey lookup/consumption, replenishment, and redacted inspectable state.
 - Browser end-to-end coverage for one identity and one editor session per browser
   profile, durable identity/document reload, and isolation between browser contexts.
+- Recipient-bound encrypted collaboration envelopes using ephemeral X25519 ECDH,
+  domain-separated HKDF-SHA-256, AES-256-GCM authenticated metadata, and Ed25519
+  sender signatures, with recoverable prekey selectors and signed-prekey fallback.
+- Bearer-authenticated toy collaboration-group APIs plus `MockSignalTransport`
+  WebSocket fan-out, sender delivery acknowledgements, offline queueing, and safe
+  group/message inspection metadata.
+- Two-browser encrypted convergence coverage in Chromium and Firefox, including
+  duplicate/delayed delivery and identity-preserving encrypted-session reload.
+- `@e2e-col/protocol` access-control payload codecs for membership, archive, and
+  delete control envelopes with Ed25519 signature verification, domain-separated
+  signing bytes, and binary wire format.
+- `@e2e-col/client` package implementing `CollaborativeClient` and `DocumentSession`
+  with transport-agnostic document sessions, access-control enforcement, auto/manual
+  sync modes, durable outbound replay, and session lifecycle management.
+- `@e2e-col/storage` durable collaborative storage extensions with atomic
+  `commitLocalChange`, `persistRemoteState`, access-control state persistence,
+  and `DurableCollaborativeStorage` interface.
+- `@e2e-col/transport` transport factory with `createTransportFactory()` for
+  config-driven transport selection (deterministic, mock Signal, WebSocket).
+- Toy-sidecar debug decrypt mode (`E2E_COL_DEBUG_DECRYPT`) with structured sync-log
+  SSE endpoint, per-envelope decryption logging, and JSON export.
+- `@e2e-col/identity` `SyncLogClient` for browser-side structured sync event
+  subscription and polling.
+- Web app sync-log panel with level/direction filtering, auto-scroll, and JSON export.
+- Web app share/invite dialog for admin participant management by phone number.
+- Web app sync-mode toggle (auto/manual) with pending-outbound count display.
+- `extend.yml` P7 appendix: educational sidecar UX specification with data-flow
+  pipeline visualization, cryptographic annotation system, protocol walkthrough
+  scenarios, and paper-aligned teaching instrument design.
 
 ### Changed
 
 - Replaced the two-replica same-page web demo with a single-client workspace shell
   so each browser profile models one real client and backend transport can be
   exchanged independently of editor UI state.
-- Playwright now launches the toy daemon alongside the web preview for browser
-  identity integration tests while retaining Chromium, Firefox, and WebKit projects.
+- Playwright now launches the toy daemon alongside an e2e-col-specific web preview
+  for browser identity/integration tests while retaining Chromium, Firefox, and
+  WebKit projects; deterministic fault-injection tests use one browser worker.
+- Browser replica composition accepts an asynchronous wire-codec seam so encrypted
+  routing can wrap canonical protocol envelopes without changing CRDT logic or the
+  `CollaborativeTransport` interface.
+- Biome configuration migrated from v2.0.0 to v2.5.9 schema with corrected folder
+  ignore patterns and linter preset.
+- Web app uses `@e2e-col/client` `CollaborativeClient` instead of direct
+  `BrowserReplicaSession` for document lifecycle management.
+- `DeterministicTransportNetwork` in web app is now lazily initialized.
+
+### Fixed
+
+- `CryptoKeyPair` TypeScript type error in `encrypted-routing.test.ts` for
+  Ed25519 `generateKey` return type (TS7+ generic `Uint8Array`).
+- `BufferSource` type incompatibility in `encrypted-router.ts` and identity
+  client for `webcrypto.subtle.sign/verify` calls (TS7+ `ArrayBufferLike`).
+- React `useCallback` dependency warnings in `CollaborativeWorkspace` for
+  `attachSession`, `refreshDocuments`, and `showError`.
+- Biome a11y lint: dialog backdrop `noStaticElementInteractions`, sync controls
+  `useAriaPropsSupportedByRole`, sync-log panel `role` attribute.
+- Missing `access-control` export from `@e2e-col/protocol` index.
+- Missing `client.ts` and `session.ts` exports from `@e2e-col/client` index.
 
 ### Security
 
@@ -34,7 +85,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
   never sent to the toy backend; the server validates signed public prekeys and
   stores only public material plus opaque bearer sessions.
 - Toy browser APIs accept only loopback HTTP(S) origins, and inspectable toy state
-  omits session tokens and private key material.
+  omits session tokens, private key material, ciphertext bodies, and document plaintext.
+- Mock Signal WebSockets authenticate in the first frame rather than URL query strings;
+  ciphertext is signed and bound to document/message/sender/recipient metadata before
+  protocol decoding, while browser private keys remain confined to identity storage.
 
 ## [0.0.1] - 2026-08-19
 

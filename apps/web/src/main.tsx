@@ -4,29 +4,18 @@ import {
   IndexedDbIdentityStorage,
   type UserIdentity
 } from '@e2e-col/identity'
-import {
-  type CollaborativeTransport,
-  DeterministicTransportNetwork,
-  WebSocketTransport
-} from '@e2e-col/transport'
-import { type FormEvent, StrictMode, useEffect, useMemo, useRef, useState } from 'react'
+import { type FormEvent, StrictMode, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BrowserReplicaSession } from './session'
+import { CollaborativeWorkspace } from './CollaborativeWorkspace'
 import './styles.css'
 
-const network = new DeterministicTransportNetwork()
-const documentId = '11111111-1111-4111-8111-111111111111'
-const sidecarUrl = import.meta.env.VITE_E2E_COL_SIDECAR_URL as string | undefined
 const identityServerUrl =
   (import.meta.env.VITE_E2E_COL_IDENTITY_URL as string | undefined) ?? 'http://127.0.0.1:18080'
 
-let transportSequence = 0
-
-function createTransport(identity: UserIdentity): CollaborativeTransport {
-  if (sidecarUrl) return new WebSocketTransport({ url: sidecarUrl })
-  transportSequence += 1
-  return network.createTransport(`${identity.userId}:${transportSequence}`)
-}
+if (import.meta.env.PROD)
+  console.warn(
+    'Toy sync-log/debug-decrypt controls are included in this production web build; keep debug decrypt disabled'
+  )
 
 function createIdentityClient(): IdentityClient {
   return new IdentityClient({
@@ -115,122 +104,6 @@ function Registration({ onRegistered }: { onRegistered: (identity: UserIdentity)
   )
 }
 
-function Workspace({ identity }: { identity: UserIdentity }) {
-  const [text, setText] = useState('')
-  const [connected, setConnected] = useState(false)
-  const [error, setError] = useState<string>()
-  const [session, setSession] = useState<BrowserReplicaSession>()
-  const storageName = useMemo(() => `e2e-col-${identity.userId}`, [identity.userId])
-
-  useEffect(() => {
-    let active = true
-    let current: BrowserReplicaSession | undefined
-    let unsubscribe: (() => void) | undefined
-    const transport = createTransport(identity)
-
-    void BrowserReplicaSession.open({
-      documentId,
-      senderId: identity.userId,
-      transport,
-      storageName
-    })
-      .then((opened) => {
-        if (!active) return void opened.close()
-        current = opened
-        setText(opened.getText())
-        unsubscribe = opened.subscribe(setText)
-        setSession(opened)
-        setConnected(true)
-      })
-      .catch((cause) => {
-        if (active) {
-          setError(cause instanceof Error ? cause.message : 'Document session failed to open')
-          setConnected(false)
-        }
-        void transport.close()
-      })
-
-    return () => {
-      active = false
-      unsubscribe?.()
-      setSession(undefined)
-      if (current) void current.close()
-      else void transport.close()
-    }
-  }, [identity, storageName])
-
-  return (
-    <main className="shell workspace-shell">
-      <header className="app-bar">
-        <div className="brand-lockup">
-          <span className="product-mark small" aria-hidden="true">
-            EC
-          </span>
-          <div>
-            <strong>e2e-col</strong>
-            <span>collaboration PoC</span>
-          </div>
-        </div>
-        <fieldset className="identity-chip" aria-label="Current identity">
-          <span className="avatar" aria-hidden="true">
-            {identity.displayName.slice(0, 1).toUpperCase()}
-          </span>
-          <span>
-            <strong>{identity.displayName}</strong>
-            <small data-testid="identity-phone">{identity.phoneNumber}</small>
-          </span>
-        </fieldset>
-      </header>
-
-      <section className="workspace-heading">
-        <div>
-          <p className="eyebrow">Private draft</p>
-          <h1>Your encrypted workspace.</h1>
-          <p className="muted">
-            This browser owns one identity and one active editor session. A later backend swap
-            changes transport configuration, not the editor contract.
-          </p>
-        </div>
-        <div className={`status-pill ${connected ? 'online' : ''}`} role="status">
-          <span aria-hidden="true" />
-          {connected ? 'Ready' : error ? 'Offline' : 'Opening'}
-        </div>
-      </section>
-
-      <section className="editor-card" aria-labelledby="editor-title">
-        <header>
-          <div>
-            <p className="section-label">Document</p>
-            <h2 id="editor-title">Untitled collaboration</h2>
-          </div>
-          <div className="transport-label">
-            {sidecarUrl ? 'Signal sidecar' : 'Local deterministic transport'}
-          </div>
-        </header>
-        <label className="sr-only" htmlFor="document-editor">
-          Document text
-        </label>
-        <textarea
-          id="document-editor"
-          value={text}
-          onChange={(event) => void session?.editText(event.target.value)}
-          disabled={!connected}
-          placeholder="Write something worth sharing…"
-        />
-        <footer>
-          <span>Browser-owned keys</span>
-          <span aria-hidden="true">·</span>
-          <span>Local-first persistence</span>
-          <span aria-hidden="true">·</span>
-          <span>{text.length} chars</span>
-        </footer>
-      </section>
-
-      {error ? <p className="error-banner">{error}</p> : null}
-    </main>
-  )
-}
-
 function App() {
   const [phase, setPhase] = useState<'loading' | 'registration' | 'workspace' | 'error'>('loading')
   const [identity, setIdentity] = useState<UserIdentity>()
@@ -288,7 +161,7 @@ function App() {
       />
     )
   }
-  return <Workspace identity={identity} />
+  return <CollaborativeWorkspace identity={identity} />
 }
 
 createRoot(document.getElementById('root')!).render(

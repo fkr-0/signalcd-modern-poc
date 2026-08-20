@@ -1,7 +1,17 @@
+import type { DocumentAccessState } from '@e2e-col/protocol'
+
+export interface DocumentMetadata {
+  readonly title?: string
+  readonly archived?: boolean
+}
+
 export interface StoredDocument {
   readonly documentId: string
   readonly snapshot: Uint8Array
   readonly updatedAt: number
+  readonly schemaVersion?: number
+  readonly createdAt?: number
+  readonly metadata?: DocumentMetadata
 }
 
 export interface OutboundRecord {
@@ -9,6 +19,20 @@ export interface OutboundRecord {
   readonly documentId: string
   readonly payload: Uint8Array
   readonly createdAt: number
+  readonly state?: 'pending' | 'attempted'
+  readonly attempts?: number
+  readonly lastAttemptAt?: number
+}
+
+export interface SeenMessage {
+  readonly documentId: string
+  readonly messageId: string
+  readonly seenAt: number
+}
+
+export interface CheckpointPolicy {
+  readonly safeRecordIds: readonly string[]
+  readonly retainAtLeast?: number
 }
 
 export interface CollaborativeStorage {
@@ -22,9 +46,36 @@ export interface CollaborativeStorage {
   close(): Promise<void>
 }
 
-export class MemoryCollaborativeStorage implements CollaborativeStorage {
+export interface AccessControlStorage {
+  loadAccessControl(documentId: string): Promise<DocumentAccessState | undefined>
+  saveAccessControl(documentId: string, state: DocumentAccessState): Promise<void>
+}
+
+export interface DurableCollaborativeStorage extends CollaborativeStorage, AccessControlStorage {
+  commitLocalChange(input: {
+    document: StoredDocument
+    outbound: readonly OutboundRecord[]
+  }): Promise<void>
+  persistRemoteState(input: {
+    document: StoredDocument
+    seen: readonly SeenMessage[]
+  }): Promise<void>
+  commitAccessChange(input: {
+    documentId: string
+    access: DocumentAccessState
+    outbound: readonly OutboundRecord[]
+    seen?: readonly SeenMessage[]
+  }): Promise<void>
+  markOutboundAttempt(recordIds: readonly string[], attemptedAt: number): Promise<void>
+  compactOutbound(documentId: string, policy: CheckpointPolicy): Promise<void>
+  hasSeen(documentId: string, messageId: string): Promise<boolean>
+}
+
+export class MemoryCollaborativeStorage implements DurableCollaborativeStorage {
   private readonly documents = new Map<string, StoredDocument>()
   private readonly outbound = new Map<string, OutboundRecord>()
+  private readonly access = new Map<string, DocumentAccessState>()
+  private readonly seen = new Map<string, SeenMessage>()
 
   async loadDocument(documentId: string): Promise<StoredDocument | undefined> {
     const value = this.documents.get(documentId)
@@ -37,6 +88,7 @@ export class MemoryCollaborativeStorage implements CollaborativeStorage {
 
   async deleteDocument(documentId: string): Promise<void> {
     this.documents.delete(documentId)
+    this.access.delete(documentId)
   }
 
   async listDocuments(): Promise<readonly StoredDocument[]> {
@@ -58,13 +110,95 @@ export class MemoryCollaborativeStorage implements CollaborativeStorage {
     this.outbound.delete(id)
   }
 
+  async loadAccessControl(documentId: string): Promise<DocumentAccessState | undefined> {
+    const value = this.access.get(documentId)
+    return value ? cloneAccessState(value) : undefined
+  }
+
+  async saveAccessControl(documentId: string, state: DocumentAccessState): Promise<void> {
+    this.access.set(documentId, cloneAccessState(state))
+  }
+
+  async commitLocalChange(input: {
+    document: StoredDocument
+    outbound: readonly OutboundRecord[]
+  }): Promise<void> {
+    this.documents.set(input.document.documentId, cloneDocument(input.document))
+    for (const record of input.outbound) this.outbound.set(record.id, cloneOutbound(record))
+  }
+
+  async persistRemoteState(input: {
+    document: StoredDocument
+    seen: readonly SeenMessage[]
+  }): Promise<void> {
+    this.documents.set(input.document.documentId, cloneDocument(input.document))
+    for (const value of input.seen)
+      this.seen.set(seenKey(value.documentId, value.messageId), { ...value })
+  }
+
+  async commitAccessChange(input: {
+    documentId: string
+    access: DocumentAccessState
+    outbound: readonly OutboundRecord[]
+    seen?: readonly SeenMessage[]
+  }): Promise<void> {
+    this.access.set(input.documentId, cloneAccessState(input.access))
+    for (const record of input.outbound) this.outbound.set(record.id, cloneOutbound(record))
+    for (const value of input.seen ?? [])
+      this.seen.set(seenKey(value.documentId, value.messageId), { ...value })
+  }
+
+  async markOutboundAttempt(recordIds: readonly string[], attemptedAt: number): Promise<void> {
+    for (const id of recordIds) {
+      const current = this.outbound.get(id)
+      if (!current) continue
+      this.outbound.set(id, {
+        ...cloneOutbound(current),
+        state: 'attempted',
+        attempts: (current.attempts ?? 0) + 1,
+        lastAttemptAt: attemptedAt
+      })
+    }
+  }
+
+  async compactOutbound(documentId: string, policy: CheckpointPolicy): Promise<void> {
+    const records = [...this.outbound.values()]
+      .filter((record) => record.documentId === documentId)
+      .sort((a, b) => a.createdAt - b.createdAt)
+    const keep = new Set(
+      records.slice(-Math.max(0, policy.retainAtLeast ?? 0)).map((record) => record.id)
+    )
+    const safe = new Set(policy.safeRecordIds)
+    for (const record of records)
+      if (safe.has(record.id) && !keep.has(record.id)) this.outbound.delete(record.id)
+  }
+
+  async hasSeen(documentId: string, messageId: string): Promise<boolean> {
+    return this.seen.has(seenKey(documentId, messageId))
+  }
+
   async close(): Promise<void> {}
 }
 
 export function cloneDocument(value: StoredDocument): StoredDocument {
-  return { ...value, snapshot: new Uint8Array(value.snapshot) }
+  return {
+    ...value,
+    snapshot: new Uint8Array(value.snapshot),
+    ...(value.metadata === undefined ? {} : { metadata: { ...value.metadata } })
+  }
 }
 
 export function cloneOutbound(value: OutboundRecord): OutboundRecord {
   return { ...value, payload: new Uint8Array(value.payload) }
+}
+
+export function cloneAccessState(value: DocumentAccessState): DocumentAccessState {
+  return {
+    ...value,
+    participants: value.participants.map((participant) => ({ ...participant }))
+  }
+}
+
+function seenKey(documentId: string, messageId: string): string {
+  return `${documentId}\u0000${messageId}`
 }

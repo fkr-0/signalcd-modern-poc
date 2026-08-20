@@ -1,0 +1,142 @@
+.sync-log-panel {
+  margin-top: 18px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #101713;
+  color: #dce7e1;
+  box-shadow: var(--shadow);
+}
+
+.sync-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgb(255 255 255 / 10%);
+}
+
+.sync-log-collapse,
+.sync-log-export {
+  min-height: 34px;
+  margin: 0;
+  padding: 0 10px;
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+}
+
+.sync-log-collapse {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 750;
+}
+
+.sync-log-collapse small {
+  color: #91a199;
+  font-weight: 600;
+}
+
+.sync-log-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sync-log-controls label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #91a199;
+  font-size: 11px;
+}
+
+.sync-log-controls select {
+  min-height: 34px;
+  padding: 0 26px 0 9px;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 9px;
+  background: #17211c;
+  color: #dce7e1;
+  font: inherit;
+}
+
+.sync-log-export {
+  border: 1px solid rgb(255 255 255 / 14%);
+}
+
+.sync-log-export:hover:not(:disabled),
+.sync-log-collapse:hover:not(:disabled) {
+  transform: none;
+  background: rgb(255 255 255 / 7%);
+}
+
+.sync-log-events {
+  max-height: 260px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.sync-log-empty {
+  margin: 0;
+  padding: 22px;
+  color: #84938b;
+  font:
+    12px / 1.5 ui-monospace,
+    "SFMono-Regular",
+    Consolas,
+    monospace;
+}
+
+.sync-log-row {
+  display: grid;
+  grid-template-columns: 92px 88px 76px 120px minmax(180px, 0.8fr) minmax(160px, 1.2fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 900px;
+  padding: 7px 12px;
+  border-bottom: 1px solid rgb(255 255 255 / 6%);
+  font:
+    11px / 1.45 ui-monospace,
+    "SFMono-Regular",
+    Consolas,
+    monospace;
+}
+
+.sync-log-row time,
+.sync-log-row > span {
+  color: #9aacb2;
+}
+
+.sync-log-row strong {
+  color: #bce7d1;
+}
+
+.sync-log-row.level-decrypted strong {
+  color: #f6d28a;
+}
+
+.sync-log-route,
+.sync-log-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sync-log-row code {
+  color: #d6e2dc;
+}
+
+@media (max-width: 720px) {
+  .sync-log-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .sync-log-controls {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+}

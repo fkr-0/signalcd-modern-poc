@@ -95,6 +95,14 @@ export class CollaborativeDocument {
     return changed
   }
 
+  mergeSnapshot(snapshot: Uint8Array): boolean {
+    const beforeHeads = this.getHeads().join(',')
+    this.doc = Automerge.merge(this.doc, Automerge.load<DocumentState>(snapshot))
+    const changed = beforeHeads !== this.getHeads().join(',')
+    if (changed) this.emit()
+    return changed
+  }
+
   save(): Uint8Array {
     return Automerge.save(this.doc)
   }

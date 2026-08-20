@@ -6,12 +6,23 @@ export const SIGNAL_CLI_HTTP_ENDPOINTS = {
   rpc: '/api/v1/rpc'
 } as const
 
+export const MOCK_GROUP_ENDPOINTS = {
+  groups: '/api/v1/groups',
+  groupTemplate: '/api/v1/groups/:group_id',
+  membersTemplate: '/api/v1/groups/:group_id/members',
+  memberTemplate: '/api/v1/groups/:group_id/members/:phone_number',
+  messages: '/api/v1/messages'
+} as const
+
 export const TOY_CONTROL_ENDPOINTS = {
   contract: '/__toy__/v1/contract',
   state: '/__toy__/v1/state',
   reset: '/__toy__/v1/reset',
   faults: '/__toy__/v1/faults',
-  inject: '/__toy__/v1/inject'
+  inject: '/__toy__/v1/inject',
+  config: '/__toy__/v1/config',
+  syncLog: '/__toy__/v1/sync-log',
+  syncLogExport: '/__toy__/v1/sync-log/export'
 } as const
 
 export const MOCK_IDENTITY_ENDPOINTS = {
@@ -192,9 +203,29 @@ export const TOY_SIGNAL_CLI_API_SPEC = {
     prekeys: 'X25519',
     sessionTokens: 'opaque bearer'
   },
+  mockGroups: {
+    endpoints: MOCK_GROUP_ENDPOINTS,
+    authentication: 'bearer; caller identity is token-derived',
+    creatorRole: 'admin',
+    documentMapping: 'one collaboration group per document UUID'
+  },
+  encryptedMessages: {
+    endpoint: MOCK_GROUP_ENDPOINTS.messages,
+    protocol: 'WebSocket',
+    authentication: 'first text frame; bearer token never appears in URL',
+    payload: 'per-recipient opaque encrypted envelope',
+    delivery: 'group fanout excluding sender plus sender acknowledgement'
+  },
+  syncLog: {
+    stream: TOY_CONTROL_ENDPOINTS.syncLog,
+    export: TOY_CONTROL_ENDPOINTS.syncLogExport,
+    levels: ['wire', 'envelope', 'application', 'decrypted'],
+    decryptedPayloads: 'explicit debug mode only'
+  },
   fidelity: {
     localDaemonApi: 'semantic',
     signalCryptography: 'not-implemented',
+    collaborationEnvelopeCryptography: 'browser-owned X25519/HKDF-SHA-256/AES-256-GCM/Ed25519',
     signalService: 'not-implemented',
     realDeviceProvisioning: 'not-implemented'
   }
