@@ -18,6 +18,8 @@ import { IndexedDbCollaborativeStorage } from '@e2e-col/storage'
 import { createTransportFactory, type TransportFactory } from '@e2e-col/transport'
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { addGroupMember, createBrowserIdentityAdapter } from './client-adapter'
+import { Dashboard } from './Dashboard'
+import { InspectorEventStore, instrumentTransportFactory } from './inspector-events'
 import { SyncLogPanel } from './SyncLogPanel'
 
 const defaultDocumentId = '11111111-1111-4111-8111-111111111111'
@@ -27,7 +29,6 @@ const identityServerUrl =
 const mockSignalUrl =
   (import.meta.env.VITE_E2E_COL_MOCK_SIGNAL_URL as string | undefined) ??
   'ws://127.0.0.1:18080/api/v1/messages'
-const configuredTransport = import.meta.env.VITE_E2E_COL_TRANSPORT as string | undefined
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 interface WorkspaceBinding {
@@ -35,8 +36,15 @@ interface WorkspaceBinding {
   readonly groupId?: string
 }
 
-export function CollaborativeWorkspace({ identity }: { readonly identity: UserIdentity }) {
+export function CollaborativeWorkspace({
+  identity,
+  configuredTransport
+}: {
+  readonly identity: UserIdentity
+  readonly configuredTransport?: string | undefined
+}) {
   const binding = useMemo(workspaceBinding, [])
+  const inspector = useMemo(() => new InspectorEventStore(), [])
   const clientRef = useRef<CollaborativeClient | undefined>(undefined)
   const sessionUnsubscribeRef = useRef<(() => void) | undefined>(undefined)
   const [session, setSession] = useState<DocumentSession>()
@@ -47,6 +55,7 @@ export function CollaborativeWorkspace({ identity }: { readonly identity: UserId
   const [syncMode, setSyncModeState] = useState<SyncMode>('auto')
   const [error, setError] = useState<string>()
   const [syncLogVisible, setSyncLogVisible] = useState(false)
+  const [dashboardVisible, setDashboardVisible] = useState(false)
   const [shareVisible, setShareVisible] = useState(false)
   const [sharePhone, setSharePhone] = useState('')
   const [shareRole, setShareRole] = useState<DocumentRole>('writer')
@@ -94,11 +103,15 @@ export function CollaborativeWorkspace({ identity }: { readonly identity: UserId
     let active = true
     const identityClient = createIdentityClient()
     const storage = new IndexedDbCollaborativeStorage({ name: `e2e-col-${identity.userId}` })
-    const transportFactory = createBrowserTransportFactory(identity, binding.groupId)
+    const transportFactory = instrumentTransportFactory(
+      createBrowserTransportFactory(identity, binding.groupId, configuredTransport),
+      inspector
+    )
     const identityAdapter = createBrowserIdentityAdapter({
       identity,
       identityClient,
       baseUrl: identityServerUrl,
+      inspector,
       ...(binding.groupId === undefined ? {} : { groupId: binding.groupId })
     })
     const client = new CollaborativeClient({
@@ -128,7 +141,15 @@ export function CollaborativeWorkspace({ identity }: { readonly identity: UserId
       clientRef.current = undefined
       void client.close().finally(() => identityClient.close())
     }
-  }, [binding.documentId, binding.groupId, identity, attachSession, refreshDocuments])
+  }, [
+    binding.documentId,
+    binding.groupId,
+    identity,
+    configuredTransport,
+    inspector,
+    attachSession,
+    refreshDocuments
+  ])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -171,10 +192,47 @@ export function CollaborativeWorkspace({ identity }: { readonly identity: UserId
 
   async function edit(nextText: string): Promise<void> {
     if (!session) return
+    const inputSizeBytes = new TextEncoder().encode(text).byteLength
+    const outputSizeBytes = new TextEncoder().encode(nextText).byteLength
+    const eventCountBeforeEdit = inspector.events().length
     try {
       await session.editText(nextText)
+      const emittedEnvelope = inspector
+        .events()
+        .slice(eventCountBeforeEdit)
+        .find(
+          (event) =>
+            event.direction === 'outbound' &&
+            event.operation === 'envelope' &&
+            event.documentId === session.documentId
+        )
+      inspector.append({
+        direction: 'outbound',
+        operation: 'crdt_change',
+        sender: identity.phoneNumber,
+        documentId: session.documentId,
+        ...(emittedEnvelope?.messageId === undefined
+          ? {}
+          : { messageId: emittedEnvelope.messageId }),
+        inputSizeBytes,
+        outputSizeBytes,
+        result: 'ok',
+        detail: {
+          measurement:
+            'document UTF-8 size before/after edit; encoded Automerge change bytes are not exposed'
+        }
+      })
       await refreshDocuments()
     } catch (cause) {
+      inspector.append({
+        direction: 'outbound',
+        operation: 'crdt_change',
+        sender: identity.phoneNumber,
+        documentId: session.documentId,
+        inputSizeBytes,
+        outputSizeBytes,
+        result: `error: ${cause instanceof Error ? cause.message : 'edit failed'}`
+      })
       showError(cause)
     }
   }
@@ -228,7 +286,24 @@ export function CollaborativeWorkspace({ identity }: { readonly identity: UserId
       status?.phase !== 'closed'
   )
   const canShare = Boolean(binding.groupId && access?.selfRole === 'admin' && !access.deleted)
-  const transportLabel = transportDescription(binding.groupId)
+  const transportLabel = transportDescription(binding.groupId, configuredTransport)
+
+  if (dashboardVisible) {
+    return (
+      <Dashboard
+        identity={identity}
+        identityServerUrl={identityServerUrl}
+        documentId={session?.documentId ?? binding.documentId}
+        {...(binding.groupId === undefined ? {} : { groupId: binding.groupId })}
+        {...(access === undefined ? {} : { access })}
+        {...(status === undefined ? {} : { status })}
+        transportLabel={transportLabel}
+        inspector={inspector}
+        syncLogClient={syncLogClient}
+        onShowWorkspace={() => setDashboardVisible(false)}
+      />
+    )
+  }
 
   return (
     <main className="shell workspace-shell">
@@ -251,6 +326,13 @@ export function CollaborativeWorkspace({ identity }: { readonly identity: UserId
             <small data-testid="identity-phone">{identity.phoneNumber}</small>
           </span>
         </fieldset>
+        <button
+          type="button"
+          className="secondary-button compact-button"
+          onClick={() => setDashboardVisible(true)}
+        >
+          Dashboard
+        </button>
       </header>
 
       <section className="workspace-heading compact-heading">
@@ -498,9 +580,10 @@ function createIdentityClient(): IdentityClient {
 
 function createBrowserTransportFactory(
   identity: UserIdentity,
-  groupId: string | undefined
+  groupId: string | undefined,
+  configuredTransport: string | undefined
 ): TransportFactory {
-  const type = resolveTransportType(groupId)
+  const type = resolveTransportType(groupId, configuredTransport)
   if (type === 'deterministic') return createTransportFactory({ type: 'deterministic' })
   if (type === 'websocket') {
     if (!sidecarUrl) throw new Error('VITE_E2E_COL_SIDECAR_URL is required for websocket transport')
@@ -531,7 +614,10 @@ function workspaceBinding(): WorkspaceBinding {
   return { documentId, ...(groupId === undefined ? {} : { groupId }) }
 }
 
-function resolveTransportType(groupId: string | undefined): 'deterministic' | 'mock' | 'websocket' {
+function resolveTransportType(
+  groupId: string | undefined,
+  configuredTransport: string | undefined
+): 'deterministic' | 'mock' | 'websocket' {
   if (
     configuredTransport === 'deterministic' ||
     configuredTransport === 'mock' ||
@@ -543,8 +629,11 @@ function resolveTransportType(groupId: string | undefined): 'deterministic' | 'm
   return groupId ? 'mock' : sidecarUrl ? 'websocket' : 'deterministic'
 }
 
-function transportDescription(groupId: string | undefined): string {
-  const type = resolveTransportType(groupId)
+function transportDescription(
+  groupId: string | undefined,
+  configuredTransport: string | undefined
+): string {
+  const type = resolveTransportType(groupId, configuredTransport)
   if (type === 'mock') return 'Encrypted mock Signal group'
   if (type === 'websocket') return 'Signal sidecar'
   return 'Local deterministic transport'

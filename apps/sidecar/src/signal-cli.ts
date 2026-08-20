@@ -23,6 +23,8 @@ function isLoopbackHostname(hostname: string): boolean {
   )
 }
 
+const MIN_RECONNECT_DELAY_MS = 10
+
 function sleep(milliseconds: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, milliseconds)
@@ -54,8 +56,8 @@ export class SignalCliHttpBackend implements BroadcastBackend {
     this.baseUrl = baseUrl.toString().replace(/\/$/, '')
     this.account = options.account
     this.fetchImpl = options.fetch ?? globalThis.fetch
-    this.reconnectDelayMs = options.reconnectDelayMs ?? 250
-    this.reconnectMaxDelayMs = options.reconnectMaxDelayMs ?? 5_000
+    this.reconnectDelayMs = Math.max(MIN_RECONNECT_DELAY_MS, options.reconnectDelayMs ?? 250)
+    this.reconnectMaxDelayMs = Math.max(this.reconnectDelayMs, options.reconnectMaxDelayMs ?? 5_000)
   }
 
   async start(listener: (message: BroadcastMessage) => void): Promise<void> {

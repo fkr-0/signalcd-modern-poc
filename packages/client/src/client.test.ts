@@ -227,4 +227,44 @@ describe('CollaborativeClient and DocumentSession', () => {
     )
     await adminClient.close()
   })
+
+  it('listDocuments returns an empty array before any documents are created', async () => {
+    const client = createClient({})
+    expect(await client.listDocuments()).toEqual([])
+    await client.close()
+  })
+
+  it('openDocument on a non-existent document creates a new blank session', async () => {
+    const client = createClient({})
+    const session = await client.openDocument(documentA)
+    expect(session.getView().text).toBe('')
+    expect(session.documentId).toBe(documentA)
+    await client.close()
+  })
+
+  it('propagates errors when the transport factory throws', async () => {
+    const factoryError = new Error('transport factory exploded')
+    const client = new CollaborativeClient({
+      senderId: 'alice',
+      storage: new MemoryCollaborativeStorage(),
+      identity: identity(),
+      transportFactory: () => {
+        throw factoryError
+      }
+    })
+    await expect(client.createDocument({ documentId: documentA })).rejects.toThrow(
+      'transport factory exploded'
+    )
+    await client.close()
+  })
+
+  it('rejects operations after the client is closed', async () => {
+    const client = createClient({})
+    await client.close()
+    await expect(client.listDocuments()).rejects.toThrow('collaborative client is closed')
+    await expect(client.createDocument({ documentId: documentA })).rejects.toThrow(
+      'collaborative client is closed'
+    )
+    await expect(client.openDocument(documentA)).rejects.toThrow('collaborative client is closed')
+  })
 })

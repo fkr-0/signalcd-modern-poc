@@ -63,6 +63,9 @@ export class DocumentSession implements DocumentSessionCommands {
   private opened = false
   private closed = false
   private inbound = Promise.resolve()
+  private inboundReady = false
+  private readonly bufferedInbound: Uint8Array[] = []
+  private replayInFlight = false
   private status: SessionStatus
 
   constructor(private readonly options: DocumentSessionOptions) {
@@ -89,16 +92,11 @@ export class DocumentSession implements DocumentSessionCommands {
 
     this.unsubscribers.push(
       this.options.transport.subscribe((wire) => {
-        this.inbound = this.inbound
-          .then(() => this.receiveWire(wire))
-          .catch((cause: unknown) => {
-            this.reportError(
-              'protocol-invalid',
-              'Inbound collaboration frame was rejected',
-              true,
-              cause
-            )
-          })
+        if (!this.inboundReady) {
+          this.bufferedInbound.push(new Uint8Array(wire))
+          return
+        }
+        this.enqueueInbound(wire)
       }),
       this.options.transport.subscribeState((event) => this.handleTransportState(event.current)),
       this.options.transport.subscribeRecovery(() => {
@@ -109,11 +107,15 @@ export class DocumentSession implements DocumentSessionCommands {
     try {
       await this.options.transport.connect(this.documentId)
       await this.bootstrapAccess()
+      this.inboundReady = true
+      for (const wire of this.bufferedInbound.splice(0)) this.enqueueInbound(wire)
       if (!stored) await this.persistDocument()
       await this.refreshPending()
       this.setStatus({ phase: 'ready', transport: this.options.transport.getState() })
       if (this.options.replayAttemptedOnReconnect) void this.replayOutbound()
     } catch (cause) {
+      this.inboundReady = false
+      this.bufferedInbound.length = 0
       this.reportError(
         'transport-unavailable',
         'Document transport could not be opened',
@@ -285,6 +287,8 @@ export class DocumentSession implements DocumentSessionCommands {
     if (this.closed) return
     this.closed = true
     for (const unsubscribe of this.unsubscribers.splice(0)) unsubscribe()
+    this.inboundReady = false
+    this.bufferedInbound.length = 0
     await this.inbound.catch(() => undefined)
     await this.persistDocument().catch(() => undefined)
     await this.options.transport.close()
@@ -361,14 +365,35 @@ export class DocumentSession implements DocumentSessionCommands {
   }
 
   private async replayOutbound(): Promise<void> {
-    if (this.closed || this.options.transport.getState() !== 'online') return
-    const records = await this.options.storage.listOutbound(this.documentId)
-    if (records.length === 0) return
+    if (
+      this.replayInFlight ||
+      !this.inboundReady ||
+      this.closed ||
+      this.options.transport.getState() !== 'online'
+    )
+      return
+    this.replayInFlight = true
     try {
-      await this.sendRecords(records)
+      const records = await this.options.storage.listOutbound(this.documentId)
+      if (records.length > 0) await this.sendRecords(records)
     } catch {
       return
+    } finally {
+      this.replayInFlight = false
     }
+  }
+
+  private enqueueInbound(wire: Uint8Array): void {
+    this.inbound = this.inbound
+      .then(() => this.receiveWire(wire))
+      .catch((cause: unknown) => {
+        this.reportError(
+          'protocol-invalid',
+          'Inbound collaboration frame was rejected',
+          true,
+          cause
+        )
+      })
   }
 
   private async receiveWire(wire: Uint8Array): Promise<void> {
@@ -596,6 +621,7 @@ export class DocumentSession implements DocumentSessionCommands {
       if (index >= 0) participants[index] = updated
       else participants.push(updated)
     }
+    assertHasActiveAdmin(participants)
     const self = participants.find(
       (participant) => participant.participantId === this.options.senderId
     )
@@ -648,6 +674,7 @@ export class DocumentSession implements DocumentSessionCommands {
     )
     for (const participant of participants)
       merged.set(participant.participantId, { ...participant })
+    assertHasActiveAdmin([...merged.values()])
     const self = merged.get(this.options.senderId)
     if (!self?.active)
       throw operationError(
@@ -671,10 +698,15 @@ export class DocumentSession implements DocumentSessionCommands {
     else if (state === 'connecting') this.setStatus({ phase: 'opening', transport: state })
     else if (state === 'online') {
       this.setStatus({
-        phase: this.status.recoveryRequired ? 'recovering' : 'ready',
+        phase: !this.inboundReady
+          ? 'opening'
+          : this.status.recoveryRequired
+            ? 'recovering'
+            : 'ready',
         transport: state
       })
-      if (this.opened && this.options.replayAttemptedOnReconnect) void this.replayOutbound()
+      if (this.opened && this.inboundReady && this.options.replayAttemptedOnReconnect)
+        void this.replayOutbound()
     }
   }
 
@@ -805,6 +837,15 @@ function selfAdminAccess(senderId: string): DocumentAccessState {
     deleted: false,
     revision: 0
   }
+}
+
+function assertHasActiveAdmin(participants: readonly DocumentParticipant[]): void {
+  if (!participants.some((participant) => participant.active && participant.role === 'admin'))
+    throw operationError(
+      'authorization-denied',
+      'Document must retain at least one active admin',
+      false
+    )
 }
 
 function operationError(

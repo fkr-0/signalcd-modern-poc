@@ -47,9 +47,18 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - Web app sync-log panel with level/direction filtering, auto-scroll, and JSON export.
 - Web app share/invite dialog for admin participant management by phone number.
 - Web app sync-mode toggle (auto/manual) with pending-outbound count display.
-- `extend.yml` P7 appendix: educational sidecar UX specification with data-flow
-  pipeline visualization, cryptographic annotation system, protocol walkthrough
-  scenarios, and paper-aligned teaching instrument design.
+- `extend.yml` P7 appendix rewritten as two-tier inspectable sidecar dashboard:
+  Tier 1 (default) is a dense inspector with data pipeline, identity/group
+  readouts, traffic log, and transport metrics; Tier 2 (opt-in, Ctrl+Shift+G)
+  is a guided view with plain-language annotations and paper citations layered
+  on top of the same event stream.
+- `docs/SIDECAR-CONTRACT.md` specifying the sidecar ↔ signal-cli HTTP API
+  contract: health check, JSON-RPC `send`, SSE `receive`, message format
+  (`e2e-col:v1:` namespace), chunking ownership, sender echo suppression,
+  fidelity matrix, and per-call input/behavior/expected-output tests.
+- 26 new tests for `@e2e-col/identity` encoding utilities, `@e2e-col/client`
+  error handling, `@e2e-col/protocol` access-control edge cases, and
+  `@e2e-col/storage` access-control state persistence.
 
 ### Changed
 
@@ -67,6 +76,9 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - Web app uses `@e2e-col/client` `CollaborativeClient` instead of direct
   `BrowserReplicaSession` for document lifecycle management.
 - `DeterministicTransportNetwork` in web app is now lazily initialized.
+- `docs/API-IMPLEMENTATION-STATUS.md` updated to reflect P3-P5 completion:
+  protocol typed control payloads, client SDK, access-control enforcement,
+  and web app integration all marked DONE.
 
 ### Fixed
 

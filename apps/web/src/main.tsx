@@ -11,11 +11,7 @@ import './styles.css'
 
 const identityServerUrl =
   (import.meta.env.VITE_E2E_COL_IDENTITY_URL as string | undefined) ?? 'http://127.0.0.1:18080'
-
-if (import.meta.env.PROD)
-  console.warn(
-    'Toy sync-log/debug-decrypt controls are included in this production web build; keep debug decrypt disabled'
-  )
+const configuredTransport = import.meta.env.VITE_E2E_COL_TRANSPORT as string | undefined
 
 function createIdentityClient(): IdentityClient {
   return new IdentityClient({
@@ -161,7 +157,7 @@ function App() {
       />
     )
   }
-  return <CollaborativeWorkspace identity={identity} />
+  return <CollaborativeWorkspace identity={identity} configuredTransport={configuredTransport} />
 }
 
 createRoot(document.getElementById('root')!).render(

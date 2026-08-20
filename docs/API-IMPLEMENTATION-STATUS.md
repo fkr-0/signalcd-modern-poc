@@ -1,6 +1,6 @@
 # API implementation status
 
-Status snapshot: **2026-08-19**  
+Status snapshot: **2026-08-20**  
 Target contract: [`TARGET-API-SPEC.md`](TARGET-API-SPEC.md)
 
 This document answers two questions for application designers:
@@ -45,9 +45,9 @@ protocol:
   chunking_reassembly: DONE
   in_memory_dedup: DONE
   wire_path_integration: DONE
-  typed_control_payloads: MISSING
+  typed_control_payloads: DONE
   persistent_dedup: MISSING
-  authenticated_access_controls: UNRESOLVED
+  authenticated_access_controls: DONE
 
 transport:
   public_byte_contract: DONE
@@ -64,18 +64,19 @@ storage:
   memory_adapter: DONE
   indexeddb_baseline: DONE
   defensive_snapshot_and_queue_bytes: DONE
-  atomic_snapshot_plus_outbound: MISSING
-  durable_attempt_state: MISSING
-  durable_seen_message_ledger: MISSING
+  atomic_snapshot_plus_outbound: DONE
+  durable_attempt_state: PARTIAL
+  durable_seen_message_ledger: PARTIAL
+  access_control_state: DONE
   migration_recovery_tests: MISSING
   restart_recovery: PARTIAL
 
 client_sdk:
-  package: MISSING
-  browser_replica_session_precursor: PARTIAL
-  protocol_storage_transport_orchestration: PARTIAL
+  package: DONE
+  browser_replica_session_precursor: DONE
+  protocol_storage_transport_orchestration: DONE
   durable_reconnect_replay: PARTIAL
-  typed_session_status_events: MISSING
+  typed_session_status_events: DONE
   snapshot_recovery: MISSING
 
 sidecar:
@@ -100,16 +101,21 @@ web_app:
   uses_transport_package: DONE
   uses_protocol_on_runtime_path: DONE
   uses_indexeddb_storage: DONE
-  browser_replica_session: PARTIAL
-  uses_target_client_sdk: MISSING
-  websocket_sidecar_runtime_mode: MISSING
+  browser_replica_session: DONE
+  uses_target_client_sdk: DONE
+  identity_registration: DONE
+  encrypted_wire_codec: DONE
+  sync_log_panel: DONE
+  sync_mode_toggle: DONE
+  share_invite_dialog: DONE
+  websocket_sidecar_runtime_mode: PARTIAL
   signal_backed: MISSING
 
 access_and_product_semantics:
   role_model_target: specified
-  enforced_roles: MISSING
-  membership_authentication: UNRESOLVED
-  archive_delete_semantics: MISSING
+  enforced_roles: DONE
+  membership_authentication: DONE
+  archive_delete_semantics: DONE
   structured_blocks_comments_attachments: MISSING
 ```
 
