@@ -1,7 +1,7 @@
 import {
+  type CollaborativeStorage,
   cloneDocument,
   cloneOutbound,
-  type CollaborativeStorage,
   type OutboundRecord,
   type StoredDocument
 } from './storage'

@@ -1,6 +1,6 @@
 import {
-  DeterministicTransportNetwork,
   type DeterministicNetworkOptions,
+  DeterministicTransportNetwork,
   type SimulatedTransport
 } from './deterministic-network'
 

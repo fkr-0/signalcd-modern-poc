@@ -1,5 +1,5 @@
 import { CollaborativeDocument } from '@e2e-col/core'
-import { DedupCache, createEnvelope, decodeEnvelope, encodeEnvelope } from '@e2e-col/protocol'
+import { createEnvelope, DedupCache, decodeEnvelope, encodeEnvelope } from '@e2e-col/protocol'
 import { IndexedDbCollaborativeStorage } from '@e2e-col/storage'
 import type { CollaborativeTransport } from '@e2e-col/transport'
 

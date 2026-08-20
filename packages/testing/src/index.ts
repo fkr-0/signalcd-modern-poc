@@ -1,9 +1,9 @@
 import type { CollaborativeDocument, DocumentChange } from '@e2e-col/core'
 
-export { CollaborativeScenario } from './scenario'
-export type { CollaborativeScenarioOptions, ScenarioPeer } from './scenario'
-export { NETWORK_PROFILES, networkProfileOptions } from './network-profiles'
 export type { NetworkProfile, NetworkProfileName } from './network-profiles'
+export { NETWORK_PROFILES, networkProfileOptions } from './network-profiles'
+export type { CollaborativeScenarioOptions, ScenarioPeer } from './scenario'
+export { CollaborativeScenario } from './scenario'
 
 export interface DeliveryBatch {
   target: CollaborativeDocument

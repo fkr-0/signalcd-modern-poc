@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  WebSocketTransport,
   type WebSocketLike,
+  WebSocketTransport,
   type WebSocketTransportOptions
 } from './websocket-transport'
 

@@ -1,7 +1,7 @@
 import {
+  type EnvelopeKind,
   MAX_PAYLOAD_BYTES,
   PROTOCOL_VERSION,
-  type EnvelopeKind,
   type ProtocolEnvelope
 } from './types'
 import { ProtocolValidationError, validateEnvelope } from './validation'

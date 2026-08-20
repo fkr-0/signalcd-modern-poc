@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { SignalCliHttpBackend, parseSignalReceive } from './signal-cli'
+import { parseSignalReceive, SignalCliHttpBackend } from './signal-cli'
 
 describe('parseSignalReceive', () => {
   it('extracts a group data message from signal-cli JSON-RPC events', () => {

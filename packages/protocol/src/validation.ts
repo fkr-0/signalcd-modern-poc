@@ -1,11 +1,11 @@
 import {
+  type ChunkMetadata,
   ENVELOPE_KINDS,
+  type EnvelopeKind,
   MAX_CHUNKS,
   MAX_PAYLOAD_BYTES,
-  PROTOCOL_VERSION,
-  type ChunkMetadata,
-  type EnvelopeKind,
   type NonChunkEnvelopeKind,
+  PROTOCOL_VERSION,
   type ProtocolEnvelope,
   type ProtocolEnvelopeInput,
   type ProtocolVersion

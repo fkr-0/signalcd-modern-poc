@@ -1,5 +1,9 @@
 export type TransportConnectionState =
-  'disconnected' | 'connecting' | 'online' | 'offline' | 'closed'
+  | 'disconnected'
+  | 'connecting'
+  | 'online'
+  | 'offline'
+  | 'closed'
 
 export type TransportUpdateListener = (update: Uint8Array) => void
 

@@ -1,6 +1,6 @@
 import { createEnvelope, decodeEnvelope, encodeEnvelope } from '@e2e-col/protocol'
-import { WebSocket } from 'ws'
 import { afterEach, describe, expect, it } from 'vitest'
+import { WebSocket } from 'ws'
 import { SidecarBridge } from '../../sidecar/src/bridge'
 import { SignalCliHttpBackend } from '../../sidecar/src/signal-cli'
 import { DEFAULT_TOY_ACCOUNT_A, DEFAULT_TOY_ACCOUNT_B, DEFAULT_TOY_GROUP_ID } from './contract'

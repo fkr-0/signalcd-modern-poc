@@ -27,7 +27,7 @@ export default defineConfig({
   ],
   webServer: {
     command:
-      'npm run build -w @e2e-col/web && npm exec -w @e2e-col/web vite preview -- --host 127.0.0.1 --port 4173',
+      'pnpm --filter @e2e-col/web build && pnpm --filter @e2e-col/web exec vite preview --host 127.0.0.1 --port 4173',
     url: 'http://127.0.0.1:4173',
     reuseExistingServer: !process.env.CI
   }

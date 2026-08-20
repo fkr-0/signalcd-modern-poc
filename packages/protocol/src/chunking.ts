@@ -4,7 +4,7 @@ import {
   MAX_PAYLOAD_BYTES,
   type ProtocolEnvelope
 } from './types'
-import { ProtocolValidationError, createProtocolId, validateEnvelope } from './validation'
+import { createProtocolId, ProtocolValidationError, validateEnvelope } from './validation'
 
 export interface ChunkEnvelopeOptions {
   readonly maxPayloadBytes?: number

@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
-  DedupCache,
-  PROTOCOL_VERSION,
-  ProtocolValidationError,
   chunkEnvelope,
   createEnvelope,
+  DedupCache,
   decodeEnvelope,
   encodeEnvelope,
   isSupportedProtocolVersion,
+  PROTOCOL_VERSION,
+  ProtocolValidationError,
   reassembleChunks,
   validateEnvelope
 } from './index'

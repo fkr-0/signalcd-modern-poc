@@ -1,5 +1,5 @@
 import { CollaborativeDocument, type DocumentChange } from '@e2e-col/core'
-import { DedupCache, createEnvelope, decodeEnvelope, encodeEnvelope } from '@e2e-col/protocol'
+import { createEnvelope, DedupCache, decodeEnvelope, encodeEnvelope } from '@e2e-col/protocol'
 import { DeterministicTransportNetwork, type SimulatedTransport } from '@e2e-col/transport'
 import { describe, expect, it } from 'vitest'
 

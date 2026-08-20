@@ -1,6 +1,6 @@
 import { chunkEnvelope, createEnvelope, decodeEnvelope, encodeEnvelope } from '@e2e-col/protocol'
-import { WebSocket } from 'ws'
 import { afterEach, describe, expect, it } from 'vitest'
+import { WebSocket } from 'ws'
 import { MemoryBroadcastBackend } from './backend'
 import { SidecarBridge } from './bridge'
 

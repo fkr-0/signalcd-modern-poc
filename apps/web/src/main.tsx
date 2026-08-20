@@ -1,10 +1,10 @@
-import { StrictMode, useEffect, useMemo, useState } from 'react'
-import { createRoot } from 'react-dom/client'
 import {
+  type CollaborativeTransport,
   DeterministicTransportNetwork,
-  WebSocketTransport,
-  type CollaborativeTransport
+  WebSocketTransport
 } from '@e2e-col/transport'
+import { StrictMode, useEffect, useState } from 'react'
+import { createRoot } from 'react-dom/client'
 import { BrowserReplicaSession } from './session'
 import './styles.css'
 
@@ -12,12 +12,15 @@ const network = new DeterministicTransportNetwork()
 const documentId = '11111111-1111-4111-8111-111111111111'
 const sidecarUrl = import.meta.env.VITE_E2E_COL_SIDECAR_URL as string | undefined
 
-function transportFor(name: string): CollaborativeTransport {
-  return sidecarUrl ? new WebSocketTransport({ url: sidecarUrl }) : network.createTransport(name)
+let transportSequence = 0
+
+function createTransport(name: string): CollaborativeTransport {
+  if (sidecarUrl) return new WebSocketTransport({ url: sidecarUrl })
+  transportSequence += 1
+  return network.createTransport(`${name}:${transportSequence}`)
 }
 
 function Replica({ name }: { name: string }) {
-  const transport = useMemo(() => transportFor(name), [name])
   const [text, setText] = useState('')
   const [connected, setConnected] = useState(false)
   const [session, setSession] = useState<BrowserReplicaSession>()
@@ -26,24 +29,33 @@ function Replica({ name }: { name: string }) {
     let active = true
     let current: BrowserReplicaSession | undefined
     let unsubscribe: (() => void) | undefined
+    const transport = createTransport(name)
+
     void BrowserReplicaSession.open({
       documentId,
       senderId: name,
       transport,
       storageName: `e2e-col-${name}`
-    }).then((opened) => {
-      if (!active) return void opened.close()
-      current = opened
-      unsubscribe = opened.subscribe(setText)
-      setSession(opened)
-      setConnected(true)
     })
+      .then((opened) => {
+        if (!active) return void opened.close()
+        current = opened
+        unsubscribe = opened.subscribe(setText)
+        setSession(opened)
+        setConnected(true)
+      })
+      .catch(() => {
+        if (active) setConnected(false)
+        void transport.close()
+      })
+
     return () => {
       active = false
       unsubscribe?.()
       if (current) void current.close()
+      else void transport.close()
     }
-  }, [name, transport])
+  }, [name])
 
   return (
     <section className="replica">

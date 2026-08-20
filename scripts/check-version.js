@@ -1,4 +1,4 @@
-import { readFile, readdir } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 
 const root = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
 const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
@@ -31,8 +31,10 @@ for (const pkg of packages) {
     'optionalDependencies'
   ]) {
     for (const [name, range] of Object.entries(pkg[section] ?? {})) {
-      if (internal.has(name) && range !== root.version) {
-        throw new Error(`${pkg.name} ${section}.${name}=${range} must equal ${root.version}`)
+      if (internal.has(name) && range !== root.version && range !== 'workspace:*') {
+        throw new Error(
+          `${pkg.name} ${section}.${name}=${range} must equal ${root.version} or workspace:*`
+        )
       }
     }
   }

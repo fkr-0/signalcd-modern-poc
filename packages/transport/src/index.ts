@@ -1,17 +1,11 @@
-export { DeterministicTransportNetwork, SimulatedTransport } from './deterministic-network'
 export type {
   DeterministicNetworkOptions,
   FaultDirective,
   ReleaseHeldOptions
 } from './deterministic-network'
-export { createLoopbackPair } from './loopback'
+export { DeterministicTransportNetwork, SimulatedTransport } from './deterministic-network'
 export type { LoopbackPair } from './loopback'
-export { WebSocketTransport } from './websocket-transport'
-export type {
-  WebSocketFactory,
-  WebSocketLike,
-  WebSocketTransportOptions
-} from './websocket-transport'
+export { createLoopbackPair } from './loopback'
 export type {
   CollaborativeTransport,
   ObservableCollaborativeTransport,
@@ -23,3 +17,9 @@ export type {
   TransportStateListener,
   TransportUpdateListener
 } from './types'
+export type {
+  WebSocketFactory,
+  WebSocketLike,
+  WebSocketTransportOptions
+} from './websocket-transport'
+export { WebSocketTransport } from './websocket-transport'

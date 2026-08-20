@@ -1,13 +1,13 @@
 import { createServer, type Server } from 'node:http'
 import {
-  DedupCache,
   chunkEnvelope,
+  DedupCache,
   decodeEnvelope,
   encodeEnvelope,
-  reassembleChunks,
-  type ProtocolEnvelope
+  type ProtocolEnvelope,
+  reassembleChunks
 } from '@e2e-col/protocol'
-import { WebSocketServer, type WebSocket } from 'ws'
+import { type WebSocket, WebSocketServer } from 'ws'
 import type { BroadcastBackend, BroadcastMessage } from './backend'
 
 const SIGNAL_PREFIX = 'e2e-col:v1:'

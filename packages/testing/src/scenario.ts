@@ -1,7 +1,7 @@
 import { CollaborativeDocument, type DocumentChange, type TextEdit } from '@e2e-col/core'
 import {
-  DeterministicTransportNetwork,
   type DeterministicNetworkOptions,
+  DeterministicTransportNetwork,
   type SimulatedTransport,
   type TransportMetrics,
   type TransportRecoveryRequired
