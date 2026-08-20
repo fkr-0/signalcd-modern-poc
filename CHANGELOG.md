@@ -38,8 +38,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
   and `DurableCollaborativeStorage` interface.
 - `@e2e-col/transport` transport factory with `createTransportFactory()` for
   config-driven transport selection (deterministic, mock Signal, WebSocket).
-- Toy-sidecar debug decrypt mode (`E2E_COL_DEBUG_DECRYPT`) with structured sync-log
-  SSE endpoint, per-envelope decryption logging, and JSON export.
+- Toy-sidecar debug decrypt controls (`E2E_COL_DEBUG_DECRYPT`) with structured sync-log
+  SSE/poll endpoints, JSON export, encrypted-envelope signature diagnostics, and an
+  injectable plaintext-inspection hook for mock identities that actually have server-side
+  decryption material.
 - `@e2e-col/identity` `SyncLogClient` for browser-side structured sync event
   subscription and polling.
 - Web app sync-log panel with level/direction filtering, auto-scroll, and JSON export.
@@ -83,7 +85,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 - Browser private identity and prekey keys are generated non-exportable and are
   never sent to the toy backend; the server validates signed public prekeys and
-  stores only public material plus opaque bearer sessions.
+  stores only public material plus opaque bearer sessions. Consequently, normal browser
+  identities cannot be plaintext-decrypted by the toy server even when debug inspection is enabled.
 - Toy browser APIs accept only loopback HTTP(S) origins, and inspectable toy state
   omits session tokens, private key material, ciphertext bodies, and document plaintext.
 - Mock Signal WebSockets authenticate in the first frame rather than URL query strings;
