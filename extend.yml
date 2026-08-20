@@ -1227,421 +1227,420 @@ invariants:
       production transport is configured.
 
 # ─────────────────────────────────────────────────────────────────────────────
-# APPENDIX A: P7 — EDUCATIONAL SIDECAR UX
+# APPENDIX A: P7 — INSPECTABLE SIDECAR DASHBOARD
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# Purpose: The toy sidecar is fundamentally an educational program. Until we
-# plug in the production sidecar, every cryptographic and authentication
-# operation should be visually inspectable. The UI must make the inner
-# workings of the Signal protocol tangible — not as a debugging tool, but
-# as a teaching instrument.
+# The toy sidecar dashboard exists so developers can see what is actually
+# happening: which keys are in play, what bytes are on the wire, how
+# envelopes are transformed, and where things land. Inspectability is the
+# default; beginner-friendly explanations are an optional overlay.
 #
-# Design principle: Every operation that happens inside a real Signal
-# sidecar (key agreement, encryption, signing, chunking, delivery) should
-# have a corresponding visual representation in the toy sidecar UI,
-# annotated with the PURPOSE of that operation as described in the
-# SPRING/EPFL paper and the Signal protocol specification.
+# Two tiers:
+#   Tier 1 (default) — the inspector. Data pipeline, operation log, traffic
+#     viewer, key/state readouts. Dense, factual, always on.
+#   Tier 2 (opt-in) — the guided view. A toggle or second tab that adds
+#     plain-language explanations, paper citations, and step-by-step
+#     walkthroughs. Only loads when explicitly enabled.
 
 appendix_P7:
-  name: "Educational Sidecar UX"
+  name: "Inspectable Sidecar Dashboard"
   status: "NOT_STARTED"
-  priority: "high — this is the primary differentiator of the toy sidecar"
+  priority: "high — primary visibility into the toy sidecar's internal state"
   depends_on: "P1-P5 must be functionally complete before polishing UX"
 
-  design_philosophy:
-    principle: >
-      The toy sidecar UI is a living diagram of the Signal protocol. Each
-      panel, animation, and annotation maps to a real protocol step. A
-      student watching the UI should be able to answer: "What happens when
-      Alice types a character and presses Enter?" by following the visual
-      flow from CRDT change through encryption, signing, transport, delivery,
-      decryption, verification, and CRDT merge — with each step annotated
-      with its cryptographic purpose.
+  # ─── Design Philosophy ──────────────────────────────────────────────────
 
-    paper_alignment: >
-      The SPRING/EPFL paper identifies several distinct operations:
-      (1) document state reconciliation via CRDTs,
-      (2) end-to-end encryption of update envelopes,
-      (3) authenticated broadcast via Signal groups,
-      (4) asynchronous delivery with delayed/duplicate tolerance.
-      The UI must present each of these as a distinct, labeled phase
-      in the data flow, not as an opaque "syncing" indicator.
+  design_philosophy:
+    default_mode: >
+      The inspector answers "what just happened?" not "why does this matter?".
+      It shows the real state: which keys exist, what envelopes were produced,
+      how many bytes went where, what the server did with them. Dense tables,
+      expandable rows, hex dumps on demand. No hand-holding, no metaphors.
+
+    beginner_mode: >
+      The guided view is a toggle that layers explanations on top of the same
+      data. It adds a pipeline diagram with labeled steps, plain-language
+      descriptions of each operation, and links to the SPRING/EPFL paper or
+      Signal protocol spec. It reads from the same event stream — it is a
+      presentation layer, not a separate data source.
 
     production_bridge: >
-      When the production sidecar replaces the toy, the educational UI
-      remains valuable as a protocol walkthrough — it can replay recorded
-      sessions or simulate scenarios without a live Signal connection.
+      When the production sidecar replaces the toy, the inspector adapts:
+      it shows whatever the production sidecar exposes (health, transport
+      metrics). The guided view can replay recorded sessions for offline
+      protocol walkthroughs.
 
-  # ─── UI Architecture ────────────────────────────────────────────────────
+  # ─── Tier 1: The Inspector (Default) ────────────────────────────────────
 
-  ui_architecture:
-    layout: "Full-page dashboard with a data-flow pipeline as the central metaphor"
+  inspector:
+    description: >
+      The default dashboard view. Always visible when the sidecar is running.
+      Shows real-time state and history without interpretation.
+
     panels:
-      - name: identity_panel
-        position: "top-left"
-        purpose: "Shows who you are and your cryptographic keys"
-        contents:
-          - "Display name and assigned phone number"
-          - "Identity key fingerprint (truncated hex, clickable for full)"
-          - "Signed prekey fingerprint and expiration status"
-          - "One-time prekey pool count (visual bar: full → depleted)"
-          - "Safety number for each known peer (clickable for comparison)"
-        annotations:
-          - concept: "Identity key"
-            purpose: "Long-term Ed25519 key that authenticates you to peers"
-            paper_ref: "Signal protocol §3.1 — identity keys establish long-term trust"
-          - concept: "Signed prekey"
-            purpose: "Medium-term X25519 key rotated periodically, signed by identity key"
-            paper_ref: "X3DH key agreement — signed prekeys enable asynchronous session setup"
-          - concept: "One-time prekey"
-            purpose: "Ephemeral X25519 key consumed on first message for forward secrecy"
-            paper_ref: "X3DH — one-time prekeys prevent replay of initial key agreement"
+      - name: identity_readout
+        position: "sidebar"
+        layout: "compact key-value list"
+        shows:
+          - field: "user_id"
+            type: "UUID"
+          - field: "phone_number"
+            type: "E.164 string"
+          - field: "identity_key_fingerprint"
+            type: "SHA-256 hex, first 16 chars"
+            expandable: "full hex + raw bytes"
+          - field: "signed_prekey_fingerprint"
+            type: "SHA-256 hex, first 16 chars"
+            expandable: "full hex + raw bytes + signature"
+          - field: "one_time_prekey_pool"
+            type: "integer count"
+            visual: "progress bar (green > 5, yellow 1-5, red 0)"
+          - field: "session_token_status"
+            type: "valid | expired | missing"
+          - field: "known_peers"
+            type: "list of {phone, fingerprint, verified}"
+            expandable: "per-peer safety number"
+        interaction:
+          - "Click any field to expand full detail"
+          - "Copy fingerprint hex (not private keys)"
 
-      - name: pipeline_panel
-        position: "center"
-        purpose: "Visual data-flow pipeline showing each transformation a message undergoes"
-        flow_steps:
-          - step: 1
-            label: "CRDT Change"
-            visual: "Text diff animation — characters appearing in the editor"
-            annotation: "Automerge produces an operation-aware change set"
-            paper_ref: "§4.1 — strongly convergent client-side reconciliation"
+      - name: group_readout
+        position: "sidebar below identity"
+        layout: "member table"
+        columns:
+          - "phone_number"
+          - "user_id"
+          - "role (admin/writer/reader)"
+          - "active (boolean)"
+          - "last_seen (timestamp)"
+          - "online (boolean)"
+        shows:
+          - "Group ID"
+          - "Document ID mapping"
+          - "Self role"
+          - "Member count"
+        interaction:
+          - "Click a member to see their full identity details"
+          - "Admin actions: change role, remove (if admin)"
 
-          - step: 2
-            label: "Protocol Envelope"
-            visual: "Structured card showing envelope fields (documentId, messageId, senderId, kind, payload size)"
-            annotation: "The change is wrapped in a versioned, typed envelope with routing metadata"
+      - name: data_pipeline
+        position: "center main area"
+        layout: "horizontal pipeline with expandable nodes"
+        description: >
+          Each outbound or inbound message passes through a sequence of
+          transformations. The pipeline shows these as a horizontal chain
+          of nodes. Each node displays: operation name, input size, output
+          size, duration, and a success/error indicator. Clicking a node
+          expands it to show the actual data (envelope fields, ciphertext
+          bytes, signature bytes, etc.).
 
-          - step: 3
-            label: "Signature"
-            visual: "Ed25519 signing animation — identity key icon producing a 64-byte signature"
-            annotation: "The sender signs the envelope metadata to prove authorship"
-            paper_ref: "§5.2 — authenticated update envelopes"
+        outbound_nodes:
+          - node: "crdt_change"
+            shows: "change type, byte count"
+          - node: "envelope"
+            shows: "kind, documentId, messageId, senderId, createdAt, sequence"
+            expandable: "full envelope JSON"
+          - node: "sign"
+            shows: "algorithm (Ed25519), signature length (64 bytes)"
+            expandable: "signature hex, signing input hex"
+          - node: "encrypt"
+            shows: "algorithm (X25519+AES-256-GCM), recipient count, ciphertext size per recipient"
+            expandable: "per-recipient: ephemeral pubkey, nonce, ciphertext hex"
+          - node: "fanout_frame"
+            shows: "frame type, version, total size, recipient count"
+            expandable: "raw frame hex"
+          - node: "transport_send"
+            shows: "transport type, bytes sent, ack status"
 
-          - step: 4
-            label: "Per-Recipient Encryption"
-            visual: "Fan-out animation — one envelope becoming N encrypted copies, one per recipient"
-            annotation: >
-              For each recipient: ephemeral X25519 ECDH → HKDF-SHA-256 →
-              AES-256-GCM. Each recipient gets their own ciphertext bound to
-              their prekey selector.
-            paper_ref: "§5.3 — recipient-bound encryption prevents group-level key compromise"
-
-          - step: 5
-            label: "Fanout Frame"
-            visual: "Binary frame visualization — magic bytes, version, per-recipient payloads"
-            annotation: "All per-recipient payloads are bundled into a single fanout frame for transport"
-
-          - step: 6
-            label: "Transport"
-            visual: "WebSocket/MockSignal animation — bytes flowing to the server"
-            annotation: "The opaque bytes are delivered to the sidecar for broadcast"
-
-          - step: 7
-            label: "Server Routing"
-            visual: "Server panel showing the frame being delivered to each recipient's SSE stream"
-            annotation: "The sidecar routes the fanout frame to each group member without decrypting"
-
-          - step: 8
-            label: "Decryption"
-            visual: "Reverse of step 4 — recipient's identity key decrypting their designated payload"
-            annotation: "Recipient derives the same shared secret via ECDH and decrypts"
-
-          - step: 9
-            label: "Signature Verification"
-            visual: "Checkmark animation — sender's public identity key verifying the signature"
-            annotation: "Recipient verifies the sender's Ed25519 signature before accepting"
-            paper_ref: "§5.2 — unverified envelopes are rejected before CRDT application"
-
-          - step: 10
-            label: "CRDT Merge"
-            visual: "Text convergence animation — remote changes appearing in the local editor"
-            annotation: "Automerge applies the change; replicas converge regardless of delivery order"
-            paper_ref: "§4.1 — convergence under reordered and duplicate delivery"
+        inbound_nodes:
+          - node: "transport_receive"
+            shows: "transport type, bytes received, timestamp"
+          - node: "fanout_decode"
+            shows: "frame type, version, recipient payloads extracted"
+          - node: "decrypt"
+            shows: "algorithm, prekey selector, plaintext size"
+            expandable: "ephemeral pubkey, nonce, plaintext hex (debug mode)"
+          - node: "verify_signature"
+            shows: "Ed25519, pass/fail, signer fingerprint"
+            expandable: "signature hex, verification input hex"
+          - node: "envelope_decode"
+            shows: "kind, documentId, messageId, senderId"
+            expandable: "full envelope JSON"
+          - node: "dedup"
+            shows: "seen/new, cache size"
+          - node: "crdt_apply"
+            shows: "merge result, document heads"
 
         interaction:
-          - "Click any step to expand its annotation panel"
-          - "Hover to see the exact bytes being transformed"
-          - "Play/pause button to step through the pipeline manually"
-          - "Speed slider: instant → slow (educational) → step-by-step"
+          - "Click a node to expand its data view"
+          - "Hover for tooltip with operation summary"
+          - "Pipeline highlights the most recent message"
+          - "Scrollable history of last N pipeline runs"
 
-      - name: group_panel
-        position: "top-right"
-        purpose: "Shows the collaboration group — who can talk to whom"
-        contents:
-          - "Group ID and document ID mapping"
-          - "Member list with roles (admin/writer/reader) and online status"
-          - "Per-member encryption status (last encrypted/decrypted timestamp)"
-          - "Membership change log (invites, removals, role changes)"
-        annotations:
-          - concept: "Group membership"
-            purpose: "Maps to a Signal group; membership changes are signed control envelopes"
-          - concept: "Role enforcement"
-            purpose: "Readers cannot edit; removed participants' edits are rejected"
+      - name: traffic_log
+        position: "bottom panel"
+        layout: "table with filter bar"
+        description: >
+          A flat, chronological log of every message that passed through
+          the sidecar — inbound, outbound, and internal. Each row is one
+          event. Dense by default; filters narrow the view.
 
-      - name: sync_log_panel
-        position: "bottom"
-        purpose: "Structured event log — the full audit trail"
-        contents:
-          - "Filterable by level: wire → envelope → application → decrypted"
-          - "Filterable by direction: inbound ↔ outbound"
-          - "Filterable by participant"
-          - "Each entry shows: timestamp, operation, participants, size, crypto details"
-          - "Decrypted payload preview (debug mode only)"
+        columns:
+          - name: "timestamp"
+            type: "ISO 8601 with milliseconds"
+          - name: "direction"
+            type: "outbound | inbound | internal"
+          - name: "operation"
+            type: "send | receive | encrypt | decrypt | sign | verify | dedup | persist | error"
+          - name: "sender"
+            type: "phone or user_id, truncated"
+          - name: "recipients"
+            type: "phone list or 'self'"
+          - name: "document_id"
+            type: "UUID, truncated"
+          - name: "envelope_kind"
+            type: "automerge-change | snapshot | membership | archive | delete | chunk"
+          - name: "message_id"
+            type: "UUID, truncated"
+          - name: "size"
+            type: "bytes in/out"
+          - name: "result"
+            type: "ok | error: <reason> | dedup:already-seen"
+
+        filters:
+          - "direction toggle: all / outbound / inbound"
+          - "operation multi-select"
+          - "participant search"
+          - "document_id search"
+          - "time range picker"
+          - "text search across all fields"
+
+        expandable_detail:
+          description: >
+            Clicking any row expands it to show the full detail of that
+            event: complete envelope fields, raw hex dumps, cryptographic
+            material (signatures, ephemeral keys, nonces), and any error
+            stack traces.
+
         interaction:
-          - "Click an entry to jump the pipeline panel to that step"
-          - "Export as JSON for offline analysis"
+          - "Click row to expand detail"
+          - "Filter bar at top"
+          - "Export filtered view as JSON"
+          - "Auto-scroll with pause on hover/click"
+          - "Max 1000 entries in view; older entries accessible via export"
 
-      - name: transport_panel
-        position: "bottom-right"
-        purpose: "Transport health and delivery guarantees visualization"
-        contents:
-          - "Connection state: online/offline/reconnecting"
-          - "Pending outbound queue depth (bar chart)"
-          - "Delivery metrics: sent, delivered, received, dropped, duplicated"
-          - "Fault injection controls (deterministic transport only)"
-          - "Recovery signal indicator"
-        annotations:
-          - concept: "At-least-once delivery"
-            purpose: "The transport may deliver duplicates; the CRDT layer handles idempotency"
-            paper_ref: "§4.3 — duplicate delivery is harmless under convergent reconciliation"
+      - name: transport_status
+        position: "sidebar bottom"
+        layout: "compact metrics"
+        shows:
+          - "connection_state: online | offline | reconnecting"
+          - "pending_outbound: integer"
+          - "metrics: sent, delivered, received, dropped, duplicated"
+          - "last_sent_at, last_received_at"
+          - "reconnect_count"
+        interaction:
+          - "Click to expand full metrics object"
 
-  # ─── Educational Annotations System ─────────────────────────────────────
+      - name: server_state
+        position: "sidebar, collapsible"
+        layout: "JSON tree viewer"
+        description: >
+          Raw server state from the toy sidecar's /__toy__/v1/state endpoint.
+          Shows registered identities, groups, active connections, fault
+          injection state, and debug configuration. Read-only.
 
-  annotations:
+  # ─── Tier 2: The Guided View (Opt-In) ───────────────────────────────────
+
+  guided_view:
     description: >
-      Every visual element in the UI has an associated annotation that
-      explains its purpose. Annotations are layered: a student can start
-      with high-level descriptions and drill down into cryptographic details.
+      A toggle in the dashboard header (or a second tab) that adds
+      explanatory layers on top of the inspector. Same data, different
+      presentation. The guided view does not replace the inspector —
+      it sits alongside it.
 
-    levels:
-      - name: beginner
-        content: "Plain-language explanation of what this step does and why"
-        example: "Your message is scrambled so only the recipient can read it"
+    activation:
+      toggle: "Guided mode switch in dashboard header"
+      keyboard: "Ctrl+Shift+G"
+      persistent: "localStorage key 'e2e-col-guided-mode'"
+      default: "off"
 
-      - name: intermediate
-        content: "Technical description with algorithm names and parameters"
-        example: "X25519 ECDH derives a shared secret, then AES-256-GCM encrypts the payload"
+    additions:
+      - name: pipeline_annotations
+        description: >
+          Each pipeline node gains a one-line explanation below its data.
+          Explanations are plain-language descriptions of what the operation
+          does and why it exists. Links to the relevant paper section appear
+          as small badges.
 
-      - name: expert
-        content: "Exact byte-level specification with wire format references"
-        example: >
-          Ephemeral X25519 public key (32 bytes) || AES-GCM nonce (12 bytes) ||
-          AES-GCM ciphertext (payload + 16-byte auth tag). AAD includes
-          documentId || messageId || senderId || recipientId.
+        examples:
+          - node: "sign"
+            annotation: "Proves you sent this message — anyone with your public key can verify"
+            paper_ref: "SignalCD §5.2"
+          - node: "encrypt"
+            annotation: "Each recipient gets their own encrypted copy — no group key, no server access"
+            paper_ref: "SignalCD §5.3"
+          - node: "dedup"
+            annotation: "The network may deliver the same message twice — this catches repeats"
+            paper_ref: "SignalCD §4.3"
 
-    paper_links:
-      description: >
-        Each annotation can link to the relevant section of the SPRING/EPFL
-        paper or the Signal protocol specification. Links open in a side panel
-        with the paper text and a highlighted passage.
-      sources:
-        - name: "SPRING/EPFL SignalCD Paper"
-          location: "upstream/ (git submodule)"
-          format: "PDF or markdown extraction"
-        - name: "Signal Protocol Specification"
-          location: "https://signal.org/docs/"
-          format: "External link"
-        - name: "X3DH Specification"
-          location: "https://signal.org/docs/specifications/x3dh/"
-          format: "External link"
-        - name: "Double Ratchet Specification"
-          location: "https://signal.org/docs/specifications/doubleratchet/"
-          format: "External link"
+      - name: operation_walkthrough
+        description: >
+          A collapsible sidebar that, when active, shows a step-by-step
+          narrative of the current operation. Not a tutorial — a live
+          narration of what is happening right now, in sequence.
 
-  # ─── Scenarios and Walkthroughs ─────────────────────────────────────────
+        example_narrative:
+          - "You typed 'H' → Automerge produced a 12-byte change"
+          - "Change wrapped in envelope (documentId: ..., kind: automerge-change)"
+          - "Envelope signed with your identity key (Ed25519, 64-byte signature)"
+          - "Envelope encrypted for 2 recipients (ephemeral X25519 + AES-256-GCM)"
+          - "Fanout frame assembled (2 payloads, 847 bytes total)"
+          - "Frame sent via MockSignal transport (acknowledged)"
+          - "Server delivered to recipient's SSE stream"
 
-  scenarios:
-    description: >
-      Pre-built educational scenarios that walk through common operations
-      step-by-step. Each scenario is a scripted sequence that highlights
-      specific protocol steps.
+      - name: concept_tooltips
+        description: >
+          Hovering over technical terms in the inspector shows a brief
+          tooltip explaining the concept. Terms include: Ed25519, X25519,
+          AES-256-GCM, HKDF, ECDH, CRDT, Automerge, forward secrecy,
+          prekey, safety number, fanout frame.
 
-    entries:
-      - name: "First Message"
-        description: "Alice registers, creates a document, and sends her first character"
-        steps:
-          - "Alice generates identity keypair (Ed25519)"
-          - "Alice generates signed prekeypair (X25519)"
-          - "Alice generates one-time prekey batch"
-          - "Alice registers with the identity server (public keys only)"
-          - "Alice creates a document (CRDT + initial membership envelope)"
-          - "Alice types 'H' — CRDT change produced"
-          - "Change wrapped in protocol envelope"
-          - "Envelope signed with identity key"
-          - "Envelope encrypted for each recipient (none yet — solo mode)"
-          - "Persisted locally, sent via transport"
-          - "Pipeline shows each step with annotations"
+      - name: paper_links
+        description: >
+          Each annotation can link to the SPRING/EPFL paper or the Signal
+          protocol specification. Links appear as small icons next to
+          annotations. Clicking opens the relevant section in a side panel.
+        sources:
+          - name: "SPRING/EPFL SignalCD Paper"
+            location: "upstream/ (git submodule)"
+          - name: "Signal Protocol Specification"
+            location: "https://signal.org/docs/"
+          - name: "X3DH Specification"
+            location: "https://signal.org/docs/specifications/x3dh/"
 
-      - name: "Two-Party Key Agreement"
-        description: "Bob joins Alice's document — full X3DH key agreement"
-        steps:
-          - "Alice invites Bob (membership envelope, signed)"
-          - "Bob registers (new identity keypair)"
-          - "Bob fetches Alice's public key bundle"
-          - "Bob computes X3DH shared secret (ephemeral + identity + signed prekey)"
-          - "Bob's first message is encrypted with the derived key"
-          - "Alice receives, derives the same shared secret, decrypts"
-          - "Pipeline highlights the key agreement steps with detailed annotations"
+      - name: key_explainer
+        description: >
+          The identity readout panel gains expandable sections that explain
+          what each key type is for. Not inline — a small "?" icon that
+          expands to show a 2-3 sentence explanation.
+        entries:
+          - key: "identity_key"
+            explain: "Your long-term signing key. Proves who you are. Never changes."
+          - key: "signed_prekey"
+            explain: "A medium-term encryption key, rotated periodically. Enables others to start talking to you even when you're offline."
+          - key: "one_time_prekey"
+            explain: "A disposable encryption key used once for the first message. Provides forward secrecy — if your long-term key is later compromised, this message stays safe."
 
-      - name: "Forward Secrecy"
-        description: "Show that compromise of long-term keys doesn't reveal past messages"
-        steps:
-          - "Record a session with several messages"
-          - "Simulate identity key compromise (UI toggle)"
-          - "Show that past messages remain encrypted (one-time prekeys were consumed)"
-          - "Show that future messages are vulnerable (expected behavior)"
-          - "Annotation explains forward secrecy and its limits"
-
-      - name: "Offline Editing and Replay"
-        description: "Alice edits offline, then reconnects and replays"
-        steps:
-          - "Alice goes offline (transport toggle)"
-          - "Alice makes 3 edits — all persisted locally, none sent"
-          - "Alice comes online — outbound queue drains"
-          - "Pipeline shows the replay sequence"
-          - "Bob receives all 3 edits and converges"
-          - "Annotation: durable local-first state + at-least-once delivery"
-
-      - name: "Reordered and Duplicate Delivery"
-        description: "Show that the system tolerates network pathologies"
-        steps:
-          - "Enable fault injection: delay first message, duplicate second"
-          - "Send 3 messages from Alice to Bob"
-          - "Bob receives: msg2, msg2 (dup), msg1 (delayed), msg3"
-          - "Dedup cache rejects the duplicate"
-          - "CRDT applies all 3 in received order — convergence achieved"
-          - "Annotation: convergent reconciliation under arbitrary delivery"
-
-      - name: "Access Control: Removing a Participant"
-        description: "Admin removes a writer; their future edits are rejected"
-        steps:
-          - "Alice (admin) removes Bob (writer)"
-          - "Membership envelope signed by Alice, delivered to all"
-          - "Bob's access state shows 'removed'"
-          - "Bob tries to edit — rejected with 'authorization-denied'"
-          - "Annotation: authenticated access control via signed control envelopes"
-
-  # ─── Visual Design Requirements ─────────────────────────────────────────
+  # ─── Visual Design ──────────────────────────────────────────────────────
 
   visual_design:
-    style: "Clean, educational, high-contrast — prioritizes clarity over aesthetics"
-    color_coding:
-      - concept: "identity"
-        color: "blue palette"
-        usage: "Identity keys, identity panel, user avatars"
-      - concept: "encryption"
-        color: "green palette"
-        usage: "Encryption steps, ciphertext, shared secrets"
-      - concept: "signature"
-        color: "amber/gold palette"
-        usage: "Signing operations, signature verification"
-      - concept: "transport"
-        color: "purple palette"
-        usage: "Network operations, WebSocket frames, delivery"
-      - concept: "storage"
-        color: "gray palette"
-        usage: "Persistence operations, IndexedDB, outbound queue"
-      - concept: "error/rejection"
-        color: "red palette"
-        usage: "Failed verification, rejected edits, authorization denied"
+    style: >
+      Dense and functional in inspector mode. Think browser DevTools:
+      small type, compact rows, monospace data, expandable detail.
+      Guided mode adds annotation text in a slightly lighter weight
+      below the data — present but not dominant.
 
-    animations:
-      - "CRDT change: character-by-character typing animation"
-      - "Encryption: envelope fading into ciphertext blocks"
-      - "Signing: key icon producing a signature blob"
-      - "Transport: bytes flowing along a wire/connection line"
-      - "Decryption: ciphertext blocks revealing the envelope"
-      - "Verification: signature checkmark/x-mark animation"
-      - "Convergence: text fragments assembling into the final document"
+    inspector_colors:
+      - "Default: neutral grays, high contrast for data"
+      - "Success: green indicator dots"
+      - "Error: red indicator dots"
+      - "Warning: amber indicator dots"
+      - "Active/highlighted pipeline node: blue border"
+
+    guided_colors:
+      - "Annotations: slightly muted text color (not gray — still readable)"
+      - "Paper ref badges: subtle blue pill"
+      - "Concept tooltips: dark background, light text"
 
     typography:
-      - "Monospace for cryptographic material (fingerprints, keys, hex)"
-      - "Sans-serif for annotations and explanations"
-      - "Code font for wire format specifications"
+      - "Data fields: system monospace, 12-13px"
+      - "Table headers: system sans-serif, 11px, uppercase"
+      - "Annotations (guided mode): system sans-serif, 13px"
+      - "Hex dumps: monospace, 11px, with byte-group spacing"
 
-  # ─── Implementation Plan ────────────────────────────────────────────────
+  # ─── Implementation ─────────────────────────────────────────────────────
 
   implementation:
     - id: P7.1
-      name: "Pipeline visualization framework"
+      name: "Inspector core"
       deliverables:
-        - "Data-flow pipeline component with 10 steps"
-        - "Step annotation system with beginner/intermediate/expert levels"
-        - "Play/pause/step-through controls"
-        - "Click-to-expand annotation panels"
-      depends_on: "P5 (sync log infrastructure)"
+        - "Dashboard layout with sidebar + main pipeline + bottom log"
+        - "Identity readout panel (key fingerprints, prekey pool, peers)"
+        - "Group readout panel (members, roles, online status)"
+        - "Transport status panel"
+      depends_on: "P1, P3"
 
     - id: P7.2
-      name: "Identity and key visualization"
+      name: "Data pipeline visualization"
       deliverables:
-        - "Identity panel with key fingerprints"
-        - "One-time prekey pool visualization"
-        - "Safety number comparison UI"
-        - "Per-recipient encryption fan-out visualization"
-      depends_on: "P1 (identity infrastructure)"
+        - "Horizontal pipeline with outbound and inbound node chains"
+        - "Node expand/collapse with data detail (envelope JSON, hex dumps)"
+        - "Pipeline history (last N messages)"
+        - "Live highlighting of most recent message"
+      depends_on: "P5 (sync log events)"
 
     - id: P7.3
-      name: "Group and access control visualization"
+      name: "Traffic log"
       deliverables:
-        - "Group panel with member list and roles"
-        - "Membership change log"
-        - "Role enforcement indicator"
-        - "Remove/invite animation"
-      depends_on: "P3 (access control)"
+        - "Table with timestamp, direction, operation, sender, recipients, size, result"
+        - "Filter bar (direction, operation, participant, document, time range, text search)"
+        - "Row expand for full event detail"
+        - "JSON export"
+      depends_on: "P5"
 
     - id: P7.4
-      name: "Transport and delivery visualization"
+      name: "Server state viewer"
       deliverables:
-        - "Transport health panel"
-        - "Queue depth chart"
-        - "Delivery metrics"
+        - "JSON tree viewer for /__toy__/v1/state"
+        - "Auto-refresh on changes"
         - "Fault injection controls (deterministic transport)"
-      depends_on: "P4 (session model)"
+      depends_on: "P5"
 
     - id: P7.5
-      name: "Educational scenarios"
+      name: "Guided view overlay"
       deliverables:
-        - "Pre-built scenario runner"
-        - "All 6 scenarios from the spec"
-        - "Paper link integration"
-        - "Scenario recording and playback"
-      depends_on: "P7.1-P7.4"
+        - "Toggle switch in dashboard header (Ctrl+Shift+G)"
+        - "Pipeline node annotations (one-line explanations + paper badges)"
+        - "Operation walkthrough sidebar (live narration)"
+        - "Concept tooltips on technical terms"
+        - "Key explainer expandables in identity panel"
+      depends_on: "P7.1-P7.3"
 
     - id: P7.6
-      name: "Production bridge"
+      name: "Recorded session replay"
       deliverables:
-        - "Recorded session replay mode (no live sidecar needed)"
-        - "Protocol simulation mode (deterministic, no network)"
-        - "Export/import scenario definitions"
+        - "Record a session's events to JSON"
+        - "Replay recorded session in the pipeline viewer"
+        - "Guided view works during replay (offline protocol walkthrough)"
       depends_on: "P7.5"
+
+  # ─── Invariants ─────────────────────────────────────────────────────────
 
   invariants:
     - id: P7-INV-1
       statement: >
-        Every visual step in the pipeline MUST map to a real protocol operation.
-        No decorative animations that don't correspond to actual data transformations.
+        The inspector shows real data from the actual event stream. It never
+        fabricates, summarizes, or interprets — it displays what happened.
 
     - id: P7-INV-2
       statement: >
-        Annotations MUST be factually correct and cite the relevant protocol
-        specification or paper section. Incorrect explanations are worse than
-        no explanations.
+        The guided view reads from the same event stream as the inspector.
+        It adds presentation, not data. If the inspector shows 3 encryption
+        recipients, the guided view explains why — but does not change the
+        count.
 
     - id: P7-INV-3
       statement: >
-        The educational UI MUST NOT interfere with the normal operation of the
-        editor. Pipeline visualization is observational only — it reads events
-        but does not modify the data path.
+        The dashboard must not interfere with the editor. It is observational
+        only. Subscribing to events, not modifying them.
 
     - id: P7-INV-4
       statement: >
-        The production sidecar swap MUST NOT require removing the educational
-        UI. The UI can operate in replay/simulation mode when no toy sidecar
-        is available.
+        Private keys and session tokens must never appear in the dashboard,
+        even in expandable detail. Fingerprints and public material only.
 
     - id: P7-INV-5
       statement: >
-        Cryptographic material displayed in the UI (fingerprints, key bytes)
-        MUST be read-only presentation. The UI MUST NOT provide copy-to-clipboard
-        for private keys or session tokens.
+        The production sidecar swap must not require removing the dashboard.
+        The inspector adapts to whatever the production sidecar exposes;
+        the guided view can operate in replay mode.
