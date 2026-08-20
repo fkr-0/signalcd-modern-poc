@@ -11,6 +11,6 @@
     "test": "vitest run src"
   },
   "dependencies": {
-    "@automerge/automerge": "^3.1.2"
+    "@automerge/automerge": "^3.4.1"
   }
 }
