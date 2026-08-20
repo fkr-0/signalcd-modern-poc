@@ -43,6 +43,7 @@ apps/
   web/          - React frontend (Vite)
   sidecar/      - WebSocket relay server
   toy-signal-cli/ - Signal protocol demo CLI
+  android/      - Native Kotlin Android client (Gradle, Compose)
 packages/
   core/         - Core CRDT/encryption logic
   protocol/     - Signal protocol implementation

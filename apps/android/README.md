@@ -6,12 +6,19 @@ Native Kotlin Android scaffold for the e2e-col collaboration client. The TypeScr
 
 ```text
 app/            Compose entry point, ViewModel, deep-link handling
-core/model/     platform-neutral join/domain values
+core/model/     platform-neutral join/domain values, SessionTransport interface
 core/protocol/  ProtocolEnvelope v1 codec and TypeScript golden fixture
 core/sidecar/   loopback-first OkHttp WebSocket client
+core/identity/  Room entities for local and remote identity storage
+core/storage/   Room database, DAOs, and atomic transaction helpers
+core/session/   Automerge DocumentSession with CRDT edit/inbound/persistence
 ```
 
-The scaffold intentionally does **not** send editor text. CRDT mutation remains disabled until an Automerge Java/Kotlin binding passes snapshot/change interoperability tests against `@e2e-col/core`. This avoids shipping a second, superficially compatible document model.
+`core:session` provides a working Automerge-backed `DocumentSession` that can
+edit text, encode/decode protocol envelopes, and persist snapshots atomically
+via Room. The Compose app scaffold still exposes a local draft text field
+rather than wiring the session into the UI; that integration is the next
+milestone.
 
 ## Requirements
 

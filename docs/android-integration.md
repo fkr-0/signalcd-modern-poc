@@ -12,9 +12,12 @@ The Android app uses a native Kotlin architecture with a small compatibility lay
 ```text
 apps/android/app                Compose UI + lifecycle/ViewModel
         │
-        ├── core:model          platform-neutral join/domain values
+        ├── core:model          platform-neutral join/domain values, SessionTransport
         ├── core:protocol       E2EC ProtocolEnvelope codec + TS golden fixtures
-        └── core:sidecar        loopback-first OkHttp WebSocket transport
+        ├── core:sidecar        loopback-first OkHttp WebSocket transport
+        ├── core:identity       Room entities for local/remote identity
+        ├── core:storage        Room database, DAOs, atomic transactions
+        └── core:session        Automerge DocumentSession lifecycle
                                       │
                                       ▼
                              e2e-col sidecar (Node)
@@ -53,9 +56,9 @@ The scaffold deliberately uses stable, current dependencies that remain compatib
 
 Compose 1.12 / BOM 2026.08.00 moves core Compose to `compileSdk 37` and requires a newer AGP point release. The project intentionally stays on the 1.11 BOM until the repository toolchain moves to API 37 as one coordinated change.
 
-Candidate native CRDT dependency: `org.automerge:automerge-kotlin:0.0.9` / `org.automerge:automerge:0.0.9`. It is **not yet wired into the app**. Before enabling document mutation/send, Android must prove that Java/Kotlin Automerge changes and snapshots round-trip against the JavaScript implementation used by `@e2e-col/core`.
+Candidate native CRDT dependency: `org.automerge:automerge-kotlin:0.0.9` / `org.automerge:automerge:0.0.9`. It is wired into `core:session` and `DocumentSession` uses it for text editing, change encoding, and snapshot persistence. Before enabling CRDT mutation in the Compose UI, Android must prove that Java/Kotlin Automerge changes and snapshots round-trip against the JavaScript implementation used by `@e2e-col/core`.
 
-For persistence, Room 2.8.4 is the current planned Android implementation, but the Room schema should be added only with the first real durable document/outbound-queue implementation rather than as unused scaffold code.
+Room 2.7.2 is used for persistence in `core:storage` and `core:identity`. The schema covers documents, outbound queue, access control, local identity, and remote identity tables with atomic transaction support via `StorageTransactionDao`.
 
 ## 3. Sidecar mode: first production path
 
@@ -135,16 +138,20 @@ The text field is deliberately labeled a **local scaffold draft**. It does not e
 
 ### Next repository boundary
 
-Introduce an `AndroidCollaborationRepository` only after CRDT interop fixtures pass. It should own:
+`core:session` provides a `DocumentSession` that owns:
 
 - Automerge document load/save and text object identity;
 - local edit -> Automerge change bytes;
 - remote change/snapshot application;
 - protocol envelope creation/validation;
-- durable snapshot + outbound queue transaction;
+- durable snapshot + outbound queue transaction via `StorageTransactionDao`;
+- `StateFlow` document/session state.
+
+What remains before UI integration:
+
 - durable `(documentId,messageId)` seen ledger;
 - retry metadata and recovery checkpoint policy;
-- `StateFlow` document/session state for the ViewModel.
+- wiring `DocumentSession` into the Compose ViewModel instead of the local draft field.
 
 The UI must never directly manipulate Automerge, Room, OkHttp, or key material.
 
@@ -175,13 +182,25 @@ The app currently sets `android:allowBackup="false"` until a reviewed backup/res
 
 ## 8. Persistence and offline behavior
 
-Android should reproduce the semantics already implemented in `@e2e-col/storage` / `@e2e-col/client`, not invent a separate queue model. The first Room schema should contain at least:
+Android reproduces the semantics already implemented in `@e2e-col/storage` / `@e2e-col/client`. The Room schema in `core:storage` contains:
 
 ```text
-documents(document_id PK, automerge_snapshot BLOB, updated_at, schema_version, metadata...)
-outbound(id PK, document_id, payload BLOB, created_at, state, attempts, last_attempt_at)
+document(documentId PK, snapshot BLOB, updatedAt, title, archived)
+outbound(id PK, documentId, payload BLOB, createdAt, state, attempts, kind)
+access_control(documentId PK, selfRole, participants, archived, deleted, revision)
+```
+
+`core:identity` adds:
+
+```text
+identity(userId PK, phoneNumber, displayName, identityKeyPublic, signedPrekeyPublic, sessionToken, createdAt)
+remote_identity(userId PK, phoneNumber, identityKeyPublic, verified, fetchedAt)
+```
+
+Still missing before M1 completion:
+
+```text
 seen_messages(document_id, message_id, seen_at, PK(document_id,message_id))
-access_control(document_id PK, state BLOB/columns, revision)
 ```
 
 Required transaction boundaries:
@@ -212,7 +231,7 @@ Running a desktop `signal-cli` JVM child process inside an ordinary Android app 
 The repository exposes:
 
 ```bash
-pnpm run android:check       # pure JVM model/protocol/sidecar compatibility tests
+pnpm run android:check       # pure JVM model/protocol/sidecar/identity/storage/session tests
 pnpm run android:assemble    # Android debug APK; requires API 36 SDK + build tools
 ```
 
@@ -243,15 +262,18 @@ The main `ci.yml` workflow also includes an Android job that runs `android:check
 - [x] loopback-first OkHttp sidecar transport
 - [x] native ProtocolEnvelope v1 codec
 - [x] byte-for-byte TypeScript/Kotlin golden fixture
-- [ ] Android API 36 assembly verified in a provisioned SDK environment
+- [x] Android API 36 assembly verified in a provisioned SDK environment
+- [x] dedicated Android CI workflows (build + test)
 
 ### M1 — local-first document core
 
-- [ ] pin Automerge Java/Kotlin binding after JS<->JVM change/snapshot fixtures pass
-- [ ] native document repository and text editing
-- [ ] Room durable snapshot/outbound/seen/access transactions
+- [x] Automerge Java/Kotlin binding wired into `core:session`
+- [x] `DocumentSession` with text editing, change encoding, and snapshot persistence
+- [x] Room durable snapshot/outbound/access transactions via `StorageTransactionDao`
+- [ ] CRDT interop fixtures proving JS<->JVM change/snapshot round-trip
 - [ ] process-death restore tests
 - [ ] sidecar send/receive convergence against two clients
+- [ ] wire `DocumentSession` into Compose ViewModel
 
 ### M2 — identity and encrypted envelopes
 
