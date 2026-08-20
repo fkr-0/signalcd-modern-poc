@@ -2,7 +2,12 @@ import 'fake-indexeddb/auto'
 import type { DocumentAccessState } from '@e2e-col/protocol'
 import { describe, expect, it } from 'vitest'
 import { IndexedDbCollaborativeStorage, MemoryCollaborativeStorage } from './index'
-import { cloneAccessState, type OutboundRecord } from './storage'
+import {
+  cloneAccessState,
+  DEFAULT_SEEN_MESSAGE_TTL_MS,
+  normalizeSeenMessageTtlMs,
+  type OutboundRecord
+} from './storage'
 
 const access: DocumentAccessState = {
   selfRole: 'admin',
@@ -32,6 +37,28 @@ for (const [name, create] of [
       await store.close()
     })
 
+    it('expires durable dedup entries according to the configured TTL', async () => {
+      let now = 1_000
+      const store =
+        name === 'memory'
+          ? new MemoryCollaborativeStorage({ seenMessageTtlMs: 100, now: () => now })
+          : new IndexedDbCollaborativeStorage({
+              name: `e2e-col-seen-ttl-${crypto.randomUUID()}`,
+              seenMessageTtlMs: 100,
+              now: () => now
+            })
+      await store.persistRemoteState({
+        document: { documentId: 'doc', snapshot: new Uint8Array([1]), updatedAt: now },
+        seen: [{ documentId: 'doc', messageId: 'ttl-message', seenAt: now }]
+      })
+      expect(await store.hasSeen('doc', 'ttl-message')).toBe(true)
+
+      now = 1_100
+      expect(await store.pruneSeenMessages()).toBe(1)
+      expect(await store.hasSeen('doc', 'ttl-message')).toBe(false)
+      await store.close()
+    })
+
     it('commits document state with outbound work and records durable dedup state', async () => {
       const store = create()
       await store.commitLocalChange({
@@ -54,9 +81,10 @@ for (const [name, create] of [
         { id: 'message', state: 'attempted', attempts: 1, lastAttemptAt: 11 }
       ])
 
+      const seenAt = Date.now()
       await store.persistRemoteState({
-        document: { documentId: 'doc', snapshot: new Uint8Array([4]), updatedAt: 12 },
-        seen: [{ documentId: 'doc', messageId: 'remote', seenAt: 12 }]
+        document: { documentId: 'doc', snapshot: new Uint8Array([4]), updatedAt: seenAt },
+        seen: [{ documentId: 'doc', messageId: 'remote', seenAt }]
       })
       expect(await store.hasSeen('doc', 'remote')).toBe(true)
       await store.close()
@@ -172,6 +200,127 @@ describe('cloneAccessState', () => {
 
     expect(original.participants[0]!.role).toBe('admin')
     expect(original.participants[0]!.active).toBe(true)
+  })
+})
+
+describe('IndexedDbCollaborativeStorage dedup retention', () => {
+  it('keeps seen-message dedup durable across a database restart', async () => {
+    const name = `e2e-col-seen-restart-${crypto.randomUUID()}`
+    let now = 5_000
+    const first = new IndexedDbCollaborativeStorage({
+      name,
+      seenMessageTtlMs: 1_000,
+      now: () => now
+    })
+    await first.persistRemoteState({
+      document: { documentId: 'doc', snapshot: new Uint8Array([1]), updatedAt: now },
+      seen: [{ documentId: 'doc', messageId: 'duplicate-after-restart', seenAt: now }]
+    })
+    await first.close()
+
+    now += 500
+    const reopened = new IndexedDbCollaborativeStorage({
+      name,
+      seenMessageTtlMs: 1_000,
+      now: () => now
+    })
+    expect(await reopened.pruneSeenMessages()).toBe(0)
+    expect(await reopened.hasSeen('doc', 'duplicate-after-restart')).toBe(true)
+    await reopened.close()
+  })
+
+  it('migrates an existing seen-message store by adding the TTL index', async () => {
+    const name = `e2e-col-seen-migration-${crypto.randomUUID()}`
+    const legacy = indexedDB.open(name, 2)
+    await new Promise<void>((resolve, reject) => {
+      legacy.onupgradeneeded = () => {
+        const db = legacy.result
+        db.createObjectStore('documents', { keyPath: 'documentId' })
+        db.createObjectStore('outbound', { keyPath: 'id' })
+        db.createObjectStore('access_control', { keyPath: 'documentId' })
+        db.createObjectStore('seen_messages', { keyPath: 'key' })
+      }
+      legacy.onsuccess = () => {
+        legacy.result.close()
+        resolve()
+      }
+      legacy.onerror = () => reject(legacy.error)
+    })
+
+    const store = new IndexedDbCollaborativeStorage({ name })
+    await expect(store.pruneSeenMessages()).resolves.toBe(0)
+    await store.close()
+  })
+})
+
+describe('normalizeSeenMessageTtlMs', () => {
+  it('returns the 24-hour default when no value is provided', () => {
+    expect(normalizeSeenMessageTtlMs()).toBe(DEFAULT_SEEN_MESSAGE_TTL_MS)
+    expect(normalizeSeenMessageTtlMs()).toBe(86_400_000)
+  })
+
+  it('accepts a custom positive integer TTL', () => {
+    expect(normalizeSeenMessageTtlMs(500)).toBe(500)
+    expect(normalizeSeenMessageTtlMs(1)).toBe(1)
+  })
+
+  it('rejects zero, negative, fractional, and unsafe values', () => {
+    expect(() => normalizeSeenMessageTtlMs(0)).toThrow(/positive safe integer/)
+    expect(() => normalizeSeenMessageTtlMs(-1)).toThrow(/positive safe integer/)
+    expect(() => normalizeSeenMessageTtlMs(1.5)).toThrow(/positive safe integer/)
+    expect(() => normalizeSeenMessageTtlMs(Number.MAX_SAFE_INTEGER + 1)).toThrow(
+      /positive safe integer/
+    )
+    expect(() => normalizeSeenMessageTtlMs(Number.NaN)).toThrow(/positive safe integer/)
+    expect(() => normalizeSeenMessageTtlMs(Number.POSITIVE_INFINITY)).toThrow(
+      /positive safe integer/
+    )
+  })
+})
+
+describe('MemoryCollaborativeStorage seen-message TTL', () => {
+  it('uses the default 24-hour TTL when no options are provided', async () => {
+    const store = new MemoryCollaborativeStorage()
+    const now = Date.now()
+    await store.persistRemoteState({
+      document: { documentId: 'doc', snapshot: new Uint8Array([1]), updatedAt: now },
+      seen: [{ documentId: 'doc', messageId: 'recent', seenAt: now }]
+    })
+    expect(await store.hasSeen('doc', 'recent')).toBe(true)
+
+    const oldEnoughToExpire = now - DEFAULT_SEEN_MESSAGE_TTL_MS - 1
+    await store.persistRemoteState({
+      document: { documentId: 'doc', snapshot: new Uint8Array([1]), updatedAt: now },
+      seen: [{ documentId: 'doc', messageId: 'old', seenAt: oldEnoughToExpire }]
+    })
+    expect(await store.hasSeen('doc', 'old')).toBe(false)
+  })
+
+  it('prunes multiple expired entries and returns the removal count', async () => {
+    let now = 10_000
+    const store = new MemoryCollaborativeStorage({ seenMessageTtlMs: 500, now: () => now })
+    await store.persistRemoteState({
+      document: { documentId: 'doc', snapshot: new Uint8Array([1]), updatedAt: now },
+      seen: [
+        { documentId: 'doc', messageId: 'a', seenAt: now - 600 },
+        { documentId: 'doc', messageId: 'b', seenAt: now - 501 },
+        { documentId: 'doc', messageId: 'c', seenAt: now - 100 }
+      ]
+    })
+    expect(await store.hasSeen('doc', 'a')).toBe(false)
+    expect(await store.hasSeen('doc', 'b')).toBe(false)
+    expect(await store.hasSeen('doc', 'c')).toBe(true)
+
+    now = 10_000
+    await store.persistRemoteState({
+      document: { documentId: 'doc', snapshot: new Uint8Array([1]), updatedAt: now },
+      seen: [
+        { documentId: 'doc', messageId: 'd', seenAt: now - 600 },
+        { documentId: 'doc', messageId: 'e', seenAt: now - 501 }
+      ]
+    })
+    expect(await store.pruneSeenMessages(now)).toBe(2)
+    expect(await store.hasSeen('doc', 'c')).toBe(true)
   })
 })
 

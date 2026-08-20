@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest'
 import { CollaborativeClient } from './client'
 import type { ClientIdentityAdapter } from './types'
 
+// This suite keeps deterministic identity/transport seams for access-control coverage.
+// The production-style encrypted path lives in tests/integration/e2ee-client.test.ts.
 const documentId = '11111111-1111-4111-8111-111111111111'
 
 async function tick(): Promise<void> {
@@ -51,8 +53,8 @@ function createClient(options: {
   })
 }
 
-describe('E2EE integration: full path from edit to convergence', () => {
-  it('encrypts, transports, decrypts, and converges through the full client stack', async () => {
+describe('deterministic client integration: access and convergence', () => {
+  it('converges through the deterministic client/storage/transport stack', async () => {
     const network = new DeterministicTransportNetwork()
     const participants: readonly DocumentParticipant[] = [
       { participantId: 'alice', role: 'admin', active: true },

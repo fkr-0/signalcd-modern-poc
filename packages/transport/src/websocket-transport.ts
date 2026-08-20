@@ -13,9 +13,16 @@ export interface WebSocketLike {
   send(data: ArrayBufferView | ArrayBuffer | Blob | string): void
   close(code?: number, reason?: string): void
   addEventListener(type: 'open', listener: () => void): void
-  addEventListener(type: 'close', listener: () => void): void
+  addEventListener(type: 'close', listener: (event?: WebSocketCloseEvent) => void): void
   addEventListener(type: 'error', listener: () => void): void
   addEventListener(type: 'message', listener: (event: MessageEvent) => void): void
+}
+
+export const SIDECAR_RECOVERY_CLOSE_CODE = 4409
+
+export interface WebSocketCloseEvent {
+  readonly code: number
+  readonly reason?: string
 }
 
 export type WebSocketFactory = (url: string) => WebSocketLike
@@ -33,6 +40,7 @@ interface MutableWebSocketMetrics {
   received: number
   dropped: number
   queuedOutbound: number
+  recoverySignals: number
 }
 
 function defaultSocketFactory(url: string): WebSocketLike {
@@ -64,6 +72,7 @@ export class WebSocketTransport implements ObservableCollaborativeTransport {
   private state: TransportConnectionState = 'disconnected'
   private documentId: string | undefined
   private hasConnected = false
+  private recoverySequence = 0
   private metrics: MutableWebSocketMetrics = {
     connectAttempts: 0,
     successfulConnections: 0,
@@ -71,7 +80,8 @@ export class WebSocketTransport implements ObservableCollaborativeTransport {
     sent: 0,
     received: 0,
     dropped: 0,
-    queuedOutbound: 0
+    queuedOutbound: 0,
+    recoverySignals: 0
   }
 
   constructor(options: WebSocketTransportOptions) {
@@ -124,9 +134,21 @@ export class WebSocketTransport implements ObservableCollaborativeTransport {
         reject(new Error(message))
       }
 
-      socket.addEventListener('close', () => {
+      socket.addEventListener('close', (event) => {
         if (this.state !== 'closed') {
           this.transition('offline')
+        }
+        if (event?.code === SIDECAR_RECOVERY_CLOSE_CODE && this.documentId !== undefined) {
+          this.recoverySequence += 1
+          this.metrics.recoverySignals += 1
+          const recovery = {
+            documentId: this.documentId,
+            sourceId: 'sidecar',
+            targetId: 'signal-cli',
+            sendSequence: this.recoverySequence,
+            reason: 'sidecar-history-risk'
+          } as const
+          for (const listener of this.recovery) listener(recovery)
         }
         rejectConnection('WebSocket closed before connection opened')
       })
@@ -207,7 +229,7 @@ export class WebSocketTransport implements ObservableCollaborativeTransport {
       queuedOutbound: this.metrics.queuedOutbound,
       pendingOutbound: this.outboundQueue.length,
       pendingInbound: 0,
-      recoverySignals: 0
+      recoverySignals: this.metrics.recoverySignals
     }
   }
 

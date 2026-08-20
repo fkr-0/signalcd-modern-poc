@@ -345,6 +345,10 @@ e2e-col:v1:<base64-of-binary-@e2e-col/protocol-frame>
 ```
 
 The semantic protocol remains the binary envelope from `@e2e-col/protocol`.
+The production compatibility audit for this release line targets signal-cli
+v0.14.7. Startup verifies HTTP health and visibility of every configured Signal
+group before the sidecar accepts browser connections. Version probing is
+best-effort because the v0.14.7 JSON-RPC manual does not document a version RPC.
 
 ### 8.2 Installing real `signal-cli`
 
@@ -421,6 +425,7 @@ Start a sidecar for toy account A:
 export SIGNAL_CLI_HTTP_URL='http://127.0.0.1:18080'
 export SIGNAL_CLI_ACCOUNT='+15550000001'
 export E2E_COL_DOCUMENT_GROUPS='{"11111111-1111-4111-8111-111111111111":"VE9ZLUUyRS1DT0wtREVNTy1HUk9VUA=="}'
+export E2E_COL_SIGNAL_BODY_MAX_BYTES='8192' # toy-only fixture value, not a production recommendation
 export E2E_COL_SIDECAR_HOST='127.0.0.1'
 export E2E_COL_SIDECAR_PORT='43127'
 
@@ -491,20 +496,29 @@ sidecar:
   signal_cli_url_env: SIGNAL_CLI_HTTP_URL
   signal_cli_account_env: SIGNAL_CLI_ACCOUNT
   document_groups_env: E2E_COL_DOCUMENT_GROUPS
+  signal_body_max_bytes_env: E2E_COL_SIGNAL_BODY_MAX_BYTES
+  allowed_origins_env: E2E_COL_ALLOWED_ORIGINS
   host_env: E2E_COL_SIDECAR_HOST
   port_env: E2E_COL_SIDECAR_PORT
   defaults:
     signal_cli_url: http://127.0.0.1:8080
     host: 127.0.0.1
     port: 43127
+    signal_body_max_bytes: required_explicit_value
 
 web:
   sidecar_url_env: VITE_E2E_COL_SIDECAR_URL
   default_transport: deterministic local
 ```
 
-`E2E_COL_DOCUMENT_GROUPS` must be a JSON object mapping document UUIDs to Signal
-group IDs. The sidecar refuses to start with an empty mapping.
+`E2E_COL_DOCUMENT_GROUPS` must be a non-empty JSON object mapping document UUIDs
+to base64 Signal group IDs; group IDs must be unique across documents.
+`E2E_COL_SIGNAL_BODY_MAX_BYTES` is also required by the production entrypoint.
+It limits the complete UTF-8 `e2e-col:v1:` + base64 body after all framing
+overhead. The audited signal-cli manual does not publish a stable numeric body
+limit, and signal-cli v0.14.0+ can turn long text into attachments, so choose the
+production value only from a verified deployment boundary rather than copying the
+toy fixture value above.
 
 ## 11. Optional real Signal setup
 
@@ -613,12 +627,14 @@ curl -N http://127.0.0.1:8080/api/v1/events
 export SIGNAL_CLI_HTTP_URL='http://127.0.0.1:8080'
 export SIGNAL_CLI_ACCOUNT='+49...'
 export E2E_COL_DOCUMENT_GROUPS="{\"11111111-1111-4111-8111-111111111111\":\"${E2E_COL_SIGNAL_GROUP}\"}"
+export E2E_COL_SIGNAL_BODY_MAX_BYTES='<verified-safe-text-body-byte-boundary>'
 
 pnpm --filter @e2e-col/sidecar dev
 ```
 
-The sidecar performs the `signal-cli` health check before it starts listening.
-A minimal end-to-end connectivity check is therefore:
+The sidecar performs signal-cli health and configured-group visibility checks,
+plus a non-fatal best-effort version probe, before it starts listening. A minimal
+connectivity check is therefore:
 
 ```bash
 curl -fsS http://127.0.0.1:43127/health
@@ -628,10 +644,14 @@ If it returns `{"ok":true}`, the sidecar process started successfully after
 reaching the configured `signal-cli` daemon. This is a connectivity check, not
 proof of a remote Signal round trip.
 
-For release evidence, use two independently linked accounts/sidecars and verify a
-real document frame in both directions. The current repository still records
-that two-account live smoke as required external evidence rather than an already
-proven CI result.
+For release evidence, the repository now contains
+`apps/sidecar/src/real-signal.smoke.test.ts`. It is disabled unless the operator
+sets `E2E_COL_REAL_SIGNAL_SMOKE=1` and supplies two already-linked account/daemon
+fixtures, a pre-existing shared group, and an explicit body boundary. The smoke
+does not register/link accounts or mutate groups; it routes one opaque protocol
+frame from sidecar A through Signal to sidecar B. Without that explicit fixture,
+the test reports unavailable/skipped and the deterministic toy contract remains
+the default gate.
 
 ## 12. Security notes for setup
 

@@ -33,6 +33,57 @@ describe('sidecar backend contract API', () => {
     })
   })
 
+  it('enables and disables debug decrypt through config and reflects both states in health', async () => {
+    const baseUrl = await startToy()
+
+    for (const debugDecrypt of [true, false]) {
+      const configured = await fetch(`${baseUrl}/__toy__/v1/config`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ debugDecrypt })
+      })
+      expect(configured.status).toBe(200)
+      await expect(configured.json()).resolves.toEqual({ debugDecrypt })
+      await expect(
+        fetch(`${baseUrl}/api/v1/check`).then((response) => response.json())
+      ).resolves.toMatchObject({ debugDecrypt })
+    }
+  })
+
+  it('exports sync-log entries with the complete structured diagnostic field set', async () => {
+    const server = new ToySignalCliServer({ port: 0, now: () => 1234 })
+    servers.push(server)
+    const { baseUrl } = await server.start()
+    server.syncLog.append({
+      level: 'decrypted',
+      direction: 'outbound',
+      senderPhone: '+15550000001',
+      recipientPhone: '+15550000002',
+      documentId,
+      envelopeKind: 'automerge-change',
+      messageId: '22222222-2222-4222-8222-222222222222',
+      preview: 'hello encrypted world',
+      signatureValid: true
+    })
+
+    const response = await fetch(`${baseUrl}/__toy__/v1/sync-log/export`)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual([
+      {
+        timestamp: 1234,
+        level: 'decrypted',
+        direction: 'outbound',
+        senderPhone: '+15550000001',
+        recipientPhone: '+15550000002',
+        documentId,
+        envelopeKind: 'automerge-change',
+        messageId: '22222222-2222-4222-8222-222222222222',
+        preview: 'hello encrypted world',
+        signatureValid: true
+      }
+    ])
+  })
+
   it('send to group validates input and returns a timestamp result', async () => {
     const baseUrl = await startToy()
     const result = await rpc(baseUrl, {

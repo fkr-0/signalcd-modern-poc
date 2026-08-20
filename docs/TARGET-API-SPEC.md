@@ -468,13 +468,27 @@ export interface TransportRecoveryRequired {
   readonly sourceId: string
   readonly targetId: string
   readonly sendSequence: number
-  readonly reason: 'dropped-frame'
+  readonly reason: 'dropped-frame' | 'sidecar-history-risk'
 }
 ```
 
-The target recovery event MAY widen with reasons such as transport queue loss,
-sidecar reset, or detected sequence gaps. Applications SHOULD NOT implement
-recovery logic directly from this event; `@e2e-col/client` owns the policy.
+`sidecar-history-risk` is emitted only when a sidecar backend explicitly proves
+transport history cannot be recovered by ordinary durable outbound replay. A
+generic HTTP/RPC send failure is ambiguous: signal-cli may have processed the
+request before the response path failed. The current `SignalCliHttpBackend`
+therefore does **not** produce this proof. Ordinary sidecar/SSE/WebSocket
+disconnects and ambiguous sends do not emit it. The event's `sendSequence` remains
+a transport-local event counter and is not the protocol envelope sequence.
+Applications SHOULD NOT implement recovery logic directly from this event;
+`@e2e-col/client` owns the snapshot/checkpoint policy.
+
+The current v1 envelope `sequence` field is **not** a correctness-grade gap proof.
+It is optional, allocated by a sender's live `DocumentSession`, resets when that
+session is recreated, and counts logical control/snapshot envelopes as well as
+CRDT changes. It also has no sender epoch, predecessor commitment, or
+recipient-specific delivery chain. A receiver MUST NOT interpret a sequence jump
+as proof of a missing CRDT increment. A future protocol version may define causal
+predecessor/epoch metadata and then add a corresponding recovery reason.
 
 ### 7.4 `WebSocketTransport`
 
@@ -598,7 +612,8 @@ export interface DurableCollaborativeStorage extends CollaborativeStorage {
 
   markOutboundAttempt(recordIds: readonly string[], attemptedAt: number): Promise<void>
   compactOutbound(documentId: string, policy: CheckpointPolicy): Promise<void>
-  hasSeen(documentId: string, messageId: string): Promise<boolean>
+  hasSeen(documentId: string, messageId: string, now?: number): Promise<boolean>
+  pruneSeenMessages(now?: number): Promise<number>
 }
 ```
 
@@ -635,18 +650,21 @@ The existing implementation name is retained:
 export interface IndexedDbStorageOptions {
   readonly name?: string
   readonly indexedDB?: IDBFactory
+  /** Defaults to 24 hours. */
+  readonly seenMessageTtlMs?: number
+  /** Injectable wall clock for deterministic retention tests. */
+  readonly now?: () => number
 }
 
-export class IndexedDbCollaborativeStorage implements CollaborativeStorage {
+export class IndexedDbCollaborativeStorage implements DurableCollaborativeStorage {
   constructor(options?: IndexedDbStorageOptions)
 }
 ```
 
-The target implementation SHOULD grow to implement
-`DurableCollaborativeStorage` without requiring apps to switch class names.
-Schema migrations MUST be explicit, versioned, and tested. Corrupt/incompatible
-state MUST fail with a recoverable storage error rather than silently resetting
-local data.
+The implementation uses schema v3 for the durable `seen_messages` ledger and its
+`seenAt` pruning index. Schema migrations MUST remain explicit, versioned, and
+tested. Corrupt/incompatible state MUST fail with a recoverable storage error
+rather than silently resetting local data.
 
 ## 9. `@e2e-col/client`
 
@@ -855,8 +873,15 @@ A snapshot MUST be merged, never used to destroy unsent concurrent local state.
 A local queue entry is safe to compact without remote acknowledgement only when a
 newer **durably retained snapshot/checkpoint** semantically subsumes it; that
 checkpoint itself remains replayable until superseded by another durable
-checkpoint. This gives bounded history without pretending WebSocket/Signal send
-success proves remote merge.
+checkpoint. Snapshot compaction applies only to CRDT increment/snapshot history;
+membership, archive, and delete records are not represented by document bytes and
+MUST NOT be discarded by this rule. This gives bounded history without pretending
+WebSocket/Signal send success proves remote merge.
+
+Recovery state MUST NOT be cleared merely because an ordinary outbound send
+returns successfully. A sender may clear its obligation after it successfully
+publishes the durable full-state checkpoint; a receiver clears only after an
+authorized snapshot is accepted, merged, and durably persisted.
 
 The baseline recovery design therefore does not require a wire-level
 `snapshot-request` kind. A future explicit peer request/ack protocol MAY be added
@@ -918,14 +943,19 @@ secure authorization enforcement until that layer exists.
 
 ## 11. Local sidecar API
 
-Stability: **candidate bridge implemented; target HTTP/WS contract and hardening remain**.
+Stability: **candidate bridge implemented and signal-cli v0.14.7 boundary-audited;
+live two-account evidence remains externally gated**.
 
 The first `SidecarBridge` and `SignalCliHttpBackend` now exist and validate binary
 protocol frames, map configured documents to Signal groups, use the
 `e2e-col:v1:` namespace, and implement chunk/reassembly/dedup plus bounded send
-attempts. The contract below is the versioned endpoint/security target; the
-current prototype still exposes `GET /health` and a WebSocket upgrade selected
-by `?documentId=...` without the final `/api/v1/...` route normalization.
+attempts. Production startup checks daemon health plus configured group visibility,
+best-effort probes version only where the daemon exposes it, validates
+loopback/origin/runtime mappings, and requires an explicit
+Signal text-body boundary so prefix/base64/chunk overhead is included. The
+contract below is the versioned endpoint/security target; the current prototype
+still exposes `GET /health` and a WebSocket upgrade selected by `?documentId=...`
+without the final `/api/v1/...` route normalization.
 
 The sidecar is a localhost companion, not a document server.
 
@@ -992,6 +1022,7 @@ Recommended close codes:
 | `1000` | normal client shutdown                     |
 | `1008` | invalid document/protocol/policy frame     |
 | `1011` | transient sidecar/internal adapter failure |
+| `4409` | explicit backend proof of transport-history risk; trigger snapshot recovery |
 
 ### 11.3 Signal body representation
 
@@ -1033,6 +1064,11 @@ delayed, and reordered delivery.
 The sidecar MAY retry sends. The client MUST retain enough durable local history
 to recover from sidecar restarts or ambiguous send outcomes. It MUST NOT assume
 that a WebSocket write proves a remote replica has received or merged the frame.
+A generic HTTP/RPC failure after an attempted send cannot establish whether
+signal-cli processed the request, so the current real adapter closes with `1011`
+and relies on replay/dedup. The sidecar MAY use `4409` only when a backend provides
+separate, explicit evidence that ordinary replay cannot cover a transport-history
+risk. Ordinary disconnects, ambiguous outcomes, and v1 sequence jumps are non-proof.
 
 ## 12. `apps/web` and other application contracts
 

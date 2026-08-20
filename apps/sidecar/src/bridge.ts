@@ -8,9 +8,18 @@ import {
   reassembleChunks
 } from '@e2e-col/protocol'
 import { type WebSocket, WebSocketServer } from 'ws'
-import type { BroadcastBackend, BroadcastMessage } from './backend'
+import {
+  type BroadcastBackend,
+  type BroadcastMessage,
+  BroadcastRecoveryRequiredError
+} from './backend'
 
 const SIGNAL_PREFIX = 'e2e-col:v1:'
+export const SIDECAR_RECOVERY_CLOSE_CODE = 4409
+export const SIDECAR_RECOVERY_CLOSE_REASON = 'backend proved transport history risk'
+const SIDECAR_TRANSIENT_FAILURE_CLOSE_CODE = 1011
+const SIDECAR_TRANSIENT_FAILURE_CLOSE_REASON = 'signal-cli send outcome unavailable'
+const CHUNK_MESSAGE_ID = '00000000-0000-4000-8000-000000000000'
 
 export interface SidecarBridgeOptions {
   readonly backend: BroadcastBackend
@@ -18,12 +27,27 @@ export interface SidecarBridgeOptions {
   readonly host?: string
   readonly port?: number
   readonly chunkPayloadBytes?: number
+  readonly signalBodyMaxBytes?: number
   readonly sendAttempts?: number
   readonly retryDelayMs?: number
   readonly chunkTtlMs?: number
   readonly maxChunkSets?: number
   readonly allowRemoteHost?: boolean
   readonly allowedOrigins?: readonly string[]
+}
+
+function signalBody(frame: ProtocolEnvelope): string {
+  return SIGNAL_PREFIX + Buffer.from(encodeEnvelope(frame)).toString('base64')
+}
+
+function signalBodyBytes(frame: ProtocolEnvelope): number {
+  return Buffer.byteLength(signalBody(frame), 'utf8')
+}
+
+function maxRawBytesForBase64Body(maxBodyBytes: number): number {
+  const base64Bytes = maxBodyBytes - Buffer.byteLength(SIGNAL_PREFIX, 'utf8')
+  if (base64Bytes < 4) return 0
+  return Math.floor(base64Bytes / 4) * 3
 }
 
 interface PendingChunkSet {
@@ -39,6 +63,7 @@ export class SidecarBridge {
   private readonly host: string
   private readonly port: number
   private readonly chunkPayloadBytes: number
+  private readonly signalBodyMaxBytes: number | undefined
   private readonly sendAttempts: number
   private readonly retryDelayMs: number
   private readonly chunkTtlMs: number
@@ -53,9 +78,19 @@ export class SidecarBridge {
 
   constructor(options: SidecarBridgeOptions) {
     this.backend = options.backend
+    const documentGroups = Object.entries(options.documentGroups)
+    if (documentGroups.length === 0)
+      throw new Error('at least one document-to-group mapping is required')
+    const groupIds = new Set<string>()
+    for (const [documentId, groupId] of documentGroups) {
+      if (!documentId || !groupId) throw new Error('document and group IDs must be non-empty')
+      if (groupIds.has(groupId))
+        throw new Error('Signal group IDs must map to exactly one document')
+      groupIds.add(groupId)
+    }
     this.documentGroups = options.documentGroups
     this.groupDocuments = new Map(
-      Object.entries(options.documentGroups).map(([documentId, groupId]) => [groupId, documentId])
+      documentGroups.map(([documentId, groupId]) => [groupId, documentId])
     )
     this.host = options.host ?? '127.0.0.1'
     if (!options.allowRemoteHost && !isLoopbackHostname(this.host)) {
@@ -63,6 +98,14 @@ export class SidecarBridge {
     }
     this.port = options.port ?? 43127
     this.chunkPayloadBytes = options.chunkPayloadBytes ?? 24 * 1024
+    if (!Number.isSafeInteger(this.chunkPayloadBytes) || this.chunkPayloadBytes <= 0)
+      throw new Error('chunkPayloadBytes must be a positive safe integer')
+    if (
+      options.signalBodyMaxBytes !== undefined &&
+      (!Number.isSafeInteger(options.signalBodyMaxBytes) || options.signalBodyMaxBytes <= 0)
+    )
+      throw new Error('signalBodyMaxBytes must be a positive safe integer')
+    this.signalBodyMaxBytes = options.signalBodyMaxBytes
     this.sendAttempts = options.sendAttempts ?? 3
     this.retryDelayMs = options.retryDelayMs ?? 25
     this.chunkTtlMs = options.chunkTtlMs ?? 5 * 60 * 1000
@@ -99,10 +142,16 @@ export class SidecarBridge {
         this.attachClient(documentId, client)
       )
     })
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject)
-      server.listen(this.port, this.host, resolve)
-    })
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject)
+        server.listen(this.port, this.host, resolve)
+      })
+    } catch (error) {
+      sockets.close()
+      await this.backend.stop()
+      throw error
+    }
     this.server = server
     this.sockets = sockets
     const address = server.address()
@@ -142,11 +191,15 @@ export class SidecarBridge {
       const groupId = this.documentGroups[documentId]!
       const envelope = decodeEnvelope(bytes)
       this.logicalDedup.hasOrAdd(envelope)
-      const frames =
-        envelope.kind === 'chunk'
-          ? [envelope]
-          : chunkEnvelope(envelope, { maxPayloadBytes: this.chunkPayloadBytes })
-      void this.sendFrames(groupId, frames)
+      let frames: readonly ProtocolEnvelope[]
+      try {
+        frames = this.framesForSignal(envelope)
+      } catch {
+        console.error('sidecar frame cannot fit configured Signal message boundary')
+        this.signalUnavailable(documentId)
+        return
+      }
+      void this.sendFrames(documentId, groupId, frames)
     })
     client.on('close', () => peers.delete(client))
   }
@@ -208,9 +261,21 @@ export class SidecarBridge {
     }
   }
 
-  private async sendFrames(groupId: string, frames: readonly ProtocolEnvelope[]): Promise<void> {
+  private signalUnavailable(documentId: string): void {
+    for (const client of this.clients.get(documentId) ?? []) {
+      if (client.readyState === client.OPEN) {
+        client.close(SIDECAR_TRANSIENT_FAILURE_CLOSE_CODE, SIDECAR_TRANSIENT_FAILURE_CLOSE_REASON)
+      }
+    }
+  }
+
+  private async sendFrames(
+    documentId: string,
+    groupId: string,
+    frames: readonly ProtocolEnvelope[]
+  ): Promise<void> {
     for (const frame of frames) {
-      const body = SIGNAL_PREFIX + Buffer.from(encodeEnvelope(frame)).toString('base64')
+      const body = signalBody(frame)
       let lastError: unknown
       for (let attempt = 1; attempt <= this.sendAttempts; attempt += 1) {
         try {
@@ -222,7 +287,58 @@ export class SidecarBridge {
           if (attempt < this.sendAttempts) await sleep(this.retryDelayMs * 2 ** (attempt - 1))
         }
       }
-      if (lastError) console.error('sidecar broadcast send failed after retries')
+      if (lastError) {
+        console.error(
+          'sidecar broadcast send failed after retries; acceptance outcome is unavailable'
+        )
+        if (lastError instanceof BroadcastRecoveryRequiredError) this.signalRecovery(documentId)
+        else this.signalUnavailable(documentId)
+        return
+      }
+    }
+  }
+
+  private framesForSignal(envelope: ProtocolEnvelope): readonly ProtocolEnvelope[] {
+    if (this.signalBodyMaxBytes === undefined) {
+      return envelope.kind === 'chunk'
+        ? [envelope]
+        : chunkEnvelope(envelope, { maxPayloadBytes: this.chunkPayloadBytes })
+    }
+    if (signalBodyBytes(envelope) <= this.signalBodyMaxBytes) return [envelope]
+    if (envelope.kind === 'chunk' || envelope.payload.byteLength === 0) {
+      throw new Error('protocol frame exceeds configured Signal body limit')
+    }
+
+    const representativeChunk: ProtocolEnvelope = {
+      ...envelope,
+      messageId: CHUNK_MESSAGE_ID,
+      kind: 'chunk',
+      chunk: {
+        index: 0,
+        total: 2,
+        originalMessageId: envelope.messageId,
+        originalKind: envelope.kind
+      },
+      payload: new Uint8Array()
+    }
+    const rawBudget = maxRawBytesForBase64Body(this.signalBodyMaxBytes)
+    const envelopeOverhead = encodeEnvelope(representativeChunk).byteLength
+    const maxPayloadBytes = Math.min(this.chunkPayloadBytes, rawBudget - envelopeOverhead)
+    if (maxPayloadBytes <= 0)
+      throw new Error('configured Signal body limit cannot fit chunk metadata')
+
+    const frames = chunkEnvelope(envelope, { maxPayloadBytes })
+    if (frames.some((frame) => signalBodyBytes(frame) > this.signalBodyMaxBytes!)) {
+      throw new Error('chunk framing exceeded configured Signal body limit')
+    }
+    return frames
+  }
+
+  private signalRecovery(documentId: string): void {
+    for (const client of this.clients.get(documentId) ?? []) {
+      if (client.readyState === client.OPEN) {
+        client.close(SIDECAR_RECOVERY_CLOSE_CODE, SIDECAR_RECOVERY_CLOSE_REASON)
+      }
     }
   }
 

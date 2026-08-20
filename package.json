@@ -21,7 +21,7 @@
     "test:storage": "vitest run packages/storage",
     "test:sidecar": "vitest run apps/sidecar",
     "test:toy-signal-cli": "vitest run apps/toy-signal-cli",
-    "android:check": "apps/android/gradlew -p apps/android :core:model:test :core:protocol:test :core:sidecar:test",
+    "android:check": "apps/android/gradlew -p apps/android :core:model:test :core:protocol:test :core:sidecar:test :core:identity:test :core:storage:test :core:session:test",
     "android:assemble": "apps/android/gradlew -p apps/android :app:assembleDebug",
     "demo:signal": "pnpm --filter @e2e-col/toy-signal-cli dev",
     "version:check": "node scripts/check-version.js",

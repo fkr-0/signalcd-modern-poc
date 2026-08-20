@@ -1,8 +1,17 @@
 import { chunkEnvelope, createEnvelope, decodeEnvelope, encodeEnvelope } from '@e2e-col/protocol'
 import { afterEach, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
-import { MemoryBroadcastBackend } from './backend'
-import { SidecarBridge } from './bridge'
+import { BroadcastRecoveryRequiredError, MemoryBroadcastBackend } from './backend'
+import { SIDECAR_RECOVERY_CLOSE_CODE, SidecarBridge } from './bridge'
+
+describe('BroadcastRecoveryRequiredError', () => {
+  it('is an Error with the correct name and message', () => {
+    const error = new BroadcastRecoveryRequiredError('test proof')
+    expect(error).toBeInstanceOf(Error)
+    expect(error.name).toBe('BroadcastRecoveryRequiredError')
+    expect(error.message).toBe('test proof')
+  })
+})
 
 const documentId = '11111111-1111-4111-8111-111111111111'
 const groupId = 'group-A=='
@@ -59,6 +68,119 @@ describe('SidecarBridge', () => {
     backend.receive({ groupId, message: signalBody(remote) })
     expect([...(await received)]).toEqual([...remote])
     socket.close()
+  })
+
+  it('keeps every prefixed base64 Signal body within the configured transport boundary', async () => {
+    const backend = new MemoryBroadcastBackend()
+    const signalBodyMaxBytes = 800
+    const bridge = new SidecarBridge({
+      backend,
+      documentGroups: { [documentId]: groupId },
+      port: 0,
+      chunkPayloadBytes: 1024,
+      signalBodyMaxBytes
+    })
+    bridges.push(bridge)
+    const address = await bridge.start()
+    const socket = new WebSocket(`ws://${address.host}:${address.port}/?documentId=${documentId}`)
+    await new Promise<void>((resolve) => socket.once('open', resolve))
+
+    socket.send(
+      frame(
+        '99999999-9999-4999-8999-999999999999',
+        new Uint8Array(Array.from({ length: 700 }, (_, index) => index % 251))
+      )
+    )
+    await viWait(() => backend.sent.length > 1)
+
+    expect(
+      backend.sent.every(({ message }) => Buffer.byteLength(message, 'utf8') <= signalBodyMaxBytes)
+    ).toBe(true)
+    const chunkFrames = backend.sent.map(({ message }) =>
+      decodeEnvelope(new Uint8Array(Buffer.from(message.slice('e2e-col:v1:'.length), 'base64')))
+    )
+    expect(chunkFrames.every(({ kind }) => kind === 'chunk')).toBe(true)
+    socket.close()
+  })
+
+  it('does not convert an ambiguous backend send failure into recovery evidence', async () => {
+    class RejectingBackend extends MemoryBroadcastBackend {
+      override async send(): Promise<void> {
+        throw new Error('response lost after an ambiguous send attempt')
+      }
+    }
+
+    const backend = new RejectingBackend()
+    const bridge = new SidecarBridge({
+      backend,
+      documentGroups: { [documentId]: groupId },
+      port: 0,
+      sendAttempts: 1
+    })
+    bridges.push(bridge)
+    const address = await bridge.start()
+    const socket = new WebSocket(`ws://${address.host}:${address.port}/?documentId=${documentId}`)
+    await new Promise<void>((resolve) => socket.once('open', resolve))
+
+    const close = new Promise<{ code: number; reason: string }>((resolve) =>
+      socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() }))
+    )
+    const error = console.error
+    console.error = () => undefined
+    try {
+      socket.send(frame('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'))
+      expect(await close).toEqual({ code: 1011, reason: 'signal-cli send outcome unavailable' })
+    } finally {
+      console.error = error
+    }
+  })
+
+  it('uses the recovery close code only for an explicit backend history-risk proof', async () => {
+    class HistoryRiskBackend extends MemoryBroadcastBackend {
+      override async send(): Promise<void> {
+        throw new BroadcastRecoveryRequiredError('backend state reset proved missing history')
+      }
+    }
+
+    const backend = new HistoryRiskBackend()
+    const bridge = new SidecarBridge({
+      backend,
+      documentGroups: { [documentId]: groupId },
+      port: 0,
+      sendAttempts: 1
+    })
+    bridges.push(bridge)
+    const address = await bridge.start()
+    const socket = new WebSocket(`ws://${address.host}:${address.port}/?documentId=${documentId}`)
+    await new Promise<void>((resolve) => socket.once('open', resolve))
+
+    const close = new Promise<{ code: number; reason: string }>((resolve) =>
+      socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() }))
+    )
+    const error = console.error
+    console.error = () => undefined
+    try {
+      socket.send(frame('abababab-abab-4bab-8bab-abababababab'))
+      expect(await close).toEqual({
+        code: SIDECAR_RECOVERY_CLOSE_CODE,
+        reason: 'backend proved transport history risk'
+      })
+    } finally {
+      console.error = error
+    }
+  })
+
+  it('rejects ambiguous duplicate group mappings before runtime routing starts', () => {
+    expect(
+      () =>
+        new SidecarBridge({
+          backend: new MemoryBroadcastBackend(),
+          documentGroups: {
+            [documentId]: groupId,
+            'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb': groupId
+          }
+        })
+    ).toThrow(/exactly one document/)
   })
 
   it('drops malformed browser frames instead of forwarding them', async () => {
@@ -132,6 +254,63 @@ describe('SidecarBridge', () => {
 
     expect([...(await received)]).toEqual([...encodeEnvelope(original)])
     socket.close()
+  })
+
+  it('rejects empty document-group mappings at construction time', () => {
+    expect(
+      () =>
+        new SidecarBridge({
+          backend: new MemoryBroadcastBackend(),
+          documentGroups: {}
+        })
+    ).toThrow(/at least one document/)
+  })
+
+  it('rejects empty document or group IDs in mappings', () => {
+    expect(
+      () =>
+        new SidecarBridge({
+          backend: new MemoryBroadcastBackend(),
+          documentGroups: { '': groupId }
+        })
+    ).toThrow(/non-empty/)
+    expect(
+      () =>
+        new SidecarBridge({
+          backend: new MemoryBroadcastBackend(),
+          documentGroups: { [documentId]: '' }
+        })
+    ).toThrow(/non-empty/)
+  })
+
+  it('rejects non-positive chunkPayloadBytes', () => {
+    expect(
+      () =>
+        new SidecarBridge({
+          backend: new MemoryBroadcastBackend(),
+          documentGroups: { [documentId]: groupId },
+          chunkPayloadBytes: 0
+        })
+    ).toThrow(/positive safe integer/)
+    expect(
+      () =>
+        new SidecarBridge({
+          backend: new MemoryBroadcastBackend(),
+          documentGroups: { [documentId]: groupId },
+          chunkPayloadBytes: -1
+        })
+    ).toThrow(/positive safe integer/)
+  })
+
+  it('rejects non-positive signalBodyMaxBytes', () => {
+    expect(
+      () =>
+        new SidecarBridge({
+          backend: new MemoryBroadcastBackend(),
+          documentGroups: { [documentId]: groupId },
+          signalBodyMaxBytes: 0
+        })
+    ).toThrow(/positive safe integer/)
   })
 
   it('rejects non-loopback binding by default', () => {

@@ -8,6 +8,20 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
+- Production signal-cli v0.14.7 boundary coverage for daemon health, best-effort version probing,
+  JSON-RPC response IDs/errors (including observed `id:null` command failures),
+  documented send-result validation, account-aware automatic/manual/sync receive
+  forms, active/unblocked startup group checks, initial SSE readiness plus reconnect
+  parsing, and an explicit opt-in two-account real-Signal smoke profile that remains
+  skipped without a fixture.
+- Sidecar runtime configuration for strict UUID → base64 Signal-group mappings,
+  exact Origin allowlists, and an explicit final Signal text-body byte boundary;
+  chunk planning now accounts for namespace, envelope, chunk metadata, and base64
+  overhead instead of relying on an unexplained production threshold.
+- Proof-only production recovery signaling: ambiguous HTTP/RPC send failures now
+  close with `1011` and rely on durable replay/dedup, while `4409` is reserved for
+  an explicit backend history-risk proof and reuses the existing snapshot/checkpoint
+  recovery path. The current real `SignalCliHttpBackend` does not fabricate that proof.
 - Android CI workflows: dedicated `android-build.yml` (debug/release APK
   assembly with artifact upload) and `android-test.yml` (unit tests across
   all six core modules plus Android lint) GitHub Actions workflows.
@@ -24,9 +38,25 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
   `DocumentSession.publishSnapshot()` exposes the same explicit recovery primitive.
 - Optional snapshot-history thresholds in the client recovery policy for replacing
   accumulated CRDT increments with a retained checkpoint.
-- E2EE integration test suite exercising the full path: identity → encrypt →
-  transport → decrypt → CRDT merge → convergence, including admin invite, role
-  enforcement, and removal scenarios.
+- Durable IndexedDB seen-message dedup with a configurable 24-hour default TTL,
+  schema-v3 `seenAt` pruning index, pre-inbound pruning on session open, and
+  restart replay coverage proving duplicate control frames are not re-applied.
+- Production-style E2EE integration evidence using real `IdentityClient`
+  registration/session restoration, recipient-bound encryption/decryption,
+  `MockSignalTransport`, and `CollaborativeClient` CRDT convergence against an
+  ephemeral toy daemon. Existing access-control suites continue to cover invite,
+  role enforcement, and removal separately.
+- Persistent-profile Playwright restart coverage proving identity/document
+  restoration, durable seen-message retention, pending-outbound persistence,
+  restart replay, and peer convergence in Chromium and Firefox.
+- Additional unit tests for `normalizeSeenMessageTtlMs` validation (default,
+  custom, zero/negative/fractional/unsafe rejection), `MemoryCollaborativeStorage`
+  TTL expiry and multi-entry pruning, `BroadcastRecoveryRequiredError` class
+  properties, sidecar config edge cases (non-JSON, empty arrays, port bounds,
+  empty accounts, origin dedup, query/fragment rejection), `SignalCliHttpBackend`
+  constructor validation (protocol, credentials, path, query, fragment, empty
+  account), and `SidecarBridge` construction guards (empty mappings, empty IDs,
+  non-positive chunk/body limits).
 - Experimental Android integration spec (`docs/android-integration.md`) with
   three Signal secret access approaches, document-channel agreement protocol,
   and5-milestone implementation plan.
@@ -35,6 +65,14 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
+- Production sidecar startup now validates signal-cli health and visibility of
+  configured groups before accepting browser connections; the undocumented
+  version RPC is best-effort and method-not-found is non-fatal. Account linking,
+  registration, and group mutation remain explicit external provisioning steps.
+- Ordinary sidecar/SSE/WebSocket disconnects remain non-evidence for missing CRDT
+  history; generic send errors are also ambiguous and do not produce recovery.
+  Only explicit close code `4409` produces `sidecar-history-risk`. v1 envelope
+  sequence remains diagnostic/session-local and is not reused as a gap detector.
 - Debug inspection no longer depends on browser identity key export. Observer
   ciphertext is bound to its key id and document/message/sender metadata, never
   routed to participants, and malformed/tampered/stale copies are diagnostic-only.
@@ -44,6 +82,12 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - Browser E2E can select an isolated toy-daemon port with
   `E2E_COL_TEST_TOY_PORT`, allowing encrypted Playwright runs to coexist with
   unrelated localhost services instead of requiring port 18080 to be free.
+- Recovery state is no longer cleared by ordinary outbound send completion; a
+  sender clears after publishing a durable full-state checkpoint and a receiver
+  clears only after accepting, merging, and persisting the snapshot.
+- v1 envelope sequence numbers are documented as diagnostic/session-local rather
+  than a safe receiver-side CRDT gap detector; generic gap proof requires future
+  epoch/predecessor metadata.
 - `extend.yml` progress section updated to reflect P1-P4 DONE, P5-P7 PARTIAL.
 
 ### Fixed
@@ -54,6 +98,12 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Security
 
+- signal-cli endpoint URLs reject embedded credentials and default to loopback;
+  default diagnostics expose neither account/group configuration nor JSON-RPC
+  error data. Browser runtime configuration still contains no Signal credentials.
+- The bounded seen-message TTL is a restart/dedup mechanism, not a complete
+  authorization replay defense. Authenticated control frames older than the TTL
+  still require monotonic/causal authorization semantics in the R6 review.
 - Browser identity/prekey private keys remain non-exportable and browser-local. The
   separate observer secret key stays inside the loopback toy daemon, rotates on
   reset or disable/enable, and is not returned through state/config/log/export APIs.

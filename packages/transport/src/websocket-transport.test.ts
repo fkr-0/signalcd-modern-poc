@@ -11,25 +11,32 @@ class FakeSocket implements WebSocketLike {
   readyState = 0
   binaryType: BinaryType = 'blob'
   readonly sent: unknown[] = []
-  readonly listeners = new Map<EventKind, Array<(event?: MessageEvent) => void>>()
+  readonly listeners = new Map<EventKind, Array<(event?: unknown) => void>>()
 
   send(data: ArrayBufferView | ArrayBuffer | Blob | string): void {
     this.sent.push(data)
   }
 
-  close(): void {
+  close(code = 1000, reason = ''): void {
     this.readyState = 3
-    this.emit('close')
+    this.emit('close', { code, reason })
   }
 
-  addEventListener(type: 'open' | 'close' | 'error', listener: () => void): void
+  addEventListener(type: 'open' | 'error', listener: () => void): void
+  addEventListener(
+    type: 'close',
+    listener: (event?: { code: number; reason?: string }) => void
+  ): void
   addEventListener(type: 'message', listener: (event: MessageEvent) => void): void
   addEventListener(
     type: EventKind,
-    listener: (() => void) | ((event: MessageEvent) => void)
+    listener:
+      | (() => void)
+      | ((event: MessageEvent) => void)
+      | ((event?: { code: number; reason?: string }) => void)
   ): void {
     const listeners = this.listeners.get(type) ?? []
-    listeners.push(listener as (event?: MessageEvent) => void)
+    listeners.push(listener as (event?: unknown) => void)
     this.listeners.set(type, listeners)
   }
 
@@ -42,7 +49,7 @@ class FakeSocket implements WebSocketLike {
     this.emit('message', { data } as MessageEvent)
   }
 
-  private emit(type: EventKind, event?: MessageEvent): void {
+  private emit(type: EventKind, event?: unknown): void {
     for (const listener of this.listeners.get(type) ?? []) {
       listener(event)
     }
@@ -89,6 +96,34 @@ describe('WebSocketTransport', () => {
       pendingOutbound: 0,
       queuedOutbound: 1
     })
+  })
+
+  it('emits recovery only for the explicit sidecar pre-acceptance failure close code', async () => {
+    const { transport, sockets } = harness()
+    const recovery: unknown[] = []
+    transport.subscribeRecovery((event) => recovery.push(event))
+
+    const firstConnect = transport.connect('doc-1')
+    sockets[0]!.open()
+    await firstConnect
+    sockets[0]!.close(1001, 'ordinary sidecar restart')
+    expect(recovery).toEqual([])
+
+    const reconnect = transport.connect('doc-1')
+    sockets[1]!.open()
+    await reconnect
+    sockets[1]!.close(4409, 'signal-cli frame was not accepted')
+
+    expect(recovery).toEqual([
+      {
+        documentId: 'doc-1',
+        sourceId: 'sidecar',
+        targetId: 'signal-cli',
+        sendSequence: 1,
+        reason: 'sidecar-history-risk'
+      }
+    ])
+    expect(transport.getMetrics().recoverySignals).toBe(1)
   })
 
   it('receives binary frames and tracks an offline/reconnect cycle', async () => {

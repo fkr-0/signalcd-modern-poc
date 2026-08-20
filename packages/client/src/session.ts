@@ -150,6 +150,10 @@ export class DocumentSession implements DocumentSessionCommands {
 
     if (sendNow && this.options.transport.getState() === 'online') {
       await this.sendRecords([snapshot])
+      // Publishing a durably retained full checkpoint is sufficient to clear
+      // this sender's recovery obligation. The receiver independently clears
+      // recovery only after it accepts and merges the snapshot.
+      this.setStatus({ phase: 'ready', recoveryRequired: false })
     } else if (this.options.transport.getState() !== 'online') {
       this.setStatus({ phase: 'offline', recoveryRequired: true })
     }
@@ -165,6 +169,10 @@ export class DocumentSession implements DocumentSessionCommands {
     }
     const storedAccess = await this.options.storage.loadAccessControl(this.documentId)
     if (storedAccess) this.access = storedAccess
+    // Initialize durable dedup state before subscribing/connecting so a
+    // transport that delivers immediately on connect cannot race restart
+    // recovery. Expired IDs are removed according to the storage TTL policy.
+    await this.options.storage.pruneSeenMessages(this.options.now())
 
     this.unsubscribers.push(
       this.options.transport.subscribe((wire) => {
@@ -433,7 +441,11 @@ export class DocumentSession implements DocumentSessionCommands {
       }
       if (sent.length > 0) await this.options.storage.markOutboundAttempt(sent, this.options.now())
       await this.refreshPending()
-      this.setStatus({ phase: 'ready', recoveryRequired: false })
+      // A successful ordinary send is not proof that a previously reported
+      // loss has been repaired. Recovery is cleared only after this replica
+      // publishes its durable checkpoint or after an accepted remote snapshot
+      // is merged.
+      this.setStatus({ phase: this.status.recoveryRequired ? 'recovering' : 'ready' })
     } catch (cause) {
       if (sent.length > 0) await this.options.storage.markOutboundAttempt(sent, this.options.now())
       await this.refreshPending()
@@ -488,7 +500,8 @@ export class DocumentSession implements DocumentSessionCommands {
         )
       : decodeEnvelope(wire)
     if (envelope.documentId !== this.documentId) return
-    if (await this.options.storage.hasSeen(this.documentId, envelope.messageId)) return
+    if (await this.options.storage.hasSeen(this.documentId, envelope.messageId, this.options.now()))
+      return
 
     if (envelope.kind === 'automerge-change') {
       this.assertSenderCanWrite(envelope.senderId)

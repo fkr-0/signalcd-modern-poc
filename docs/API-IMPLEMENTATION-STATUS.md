@@ -35,7 +35,7 @@ core:
   duplicate_idempotence: DONE
   concurrent_convergence: DONE
   public_automerge_type_isolation: PARTIAL
-  snapshot_merge_api: MISSING
+  snapshot_merge_api: DONE
   structured_document_model: MISSING
 
 protocol:
@@ -46,7 +46,7 @@ protocol:
   in_memory_dedup: DONE
   wire_path_integration: DONE
   typed_control_payloads: DONE
-  persistent_dedup: MISSING
+  persistent_dedup: DONE
   authenticated_access_controls: DONE
 
 transport:
@@ -66,33 +66,38 @@ storage:
   defensive_snapshot_and_queue_bytes: DONE
   atomic_snapshot_plus_outbound: DONE
   durable_attempt_state: PARTIAL
-  durable_seen_message_ledger: PARTIAL
+  durable_seen_message_ledger: DONE
   access_control_state: DONE
   migration_recovery_tests: MISSING
-  restart_recovery: PARTIAL
+  restart_recovery: DONE
 
 client_sdk:
   package: DONE
   browser_replica_session_precursor: DONE
   protocol_storage_transport_orchestration: DONE
-  durable_reconnect_replay: PARTIAL
+  durable_reconnect_replay: DONE
   typed_session_status_events: DONE
-  snapshot_recovery: MISSING
+  snapshot_recovery: DONE
 
 sidecar:
   package: DONE
   basic_health_api: DONE
   browser_websocket_bridge: DONE
   signal_cli_http_sse_adapter: DONE
+  signal_cli_v0_14_7_contract_audit: DONE
+  startup_best_effort_version_group_visibility_checks: DONE
   protocol_validation_routing: DONE
   chunking_reassembly_dedup: DONE
+  configured_final_signal_body_boundary: DONE
   bounded_send_retries_backoff: DONE
+  pre_acceptance_recovery_signal: DONE
   sse_reconnect_backoff: DONE
   account_aware_receive_filter: DONE
   localhost_origin_hardening: DONE
+  strict_runtime_document_group_config: DONE
   bounded_chunk_accumulator: DONE
-  sidecar_test_gate: PARTIAL
-  real_signal_e2e: MISSING
+  sidecar_test_gate: DONE
+  real_signal_e2e: PARTIAL
 
 web_app:
   local_two_replica_demo: DONE
@@ -121,51 +126,53 @@ access_and_product_semantics:
 
 ## 3. Verified repository baseline
 
-After storage, web-session, and Track E hardening settled, the repository has
-this verification state:
+Phase-2 verification on 2026-08-20 records this current repository state:
 
 ```text
 version/type/build:
-  -> version check: 0.0.1 across 7 workspaces
-  -> all workspace typechecks pass, including storage + sidecar
-  -> ESLint passes
-  -> Prettier check passes
+  -> version check: 0.0.2 across 10 workspaces
+  -> all workspace typechecks pass
+  -> Biome check/format gate: 123 files clean
   -> production Vite build passes
 
-sidecar-focused:
-npm run test:sidecar
-  -> 13/13 tests pass across 2 files
+phase-2 focused Vitest evidence:
+  -> recovery + deterministic client + production-style encrypted client + sidecar contracts
+  -> 8/8 files, 54/54 tests pass
 
-full parallel Vitest gate:
-npm test
-  -> 56/56 tests pass across 9 files
-  -> sidecar SSE reconnect/account-filter coverage passes in the parallel suite
+full Vitest gate:
+  -> 94/94 files, 826/826 tests pass
 
-browser E2E:
-  -> Chromium: 3/3 scenarios pass
-  -> Firefox:  3/3 scenarios pass
-  -> WebKit:   downloaded/configured, but this Arch host lacks Playwright's fallback Ubuntu runtime libraries
+browser E2E (isolated E2E_COL_TEST_TOY_PORT):
+  -> Chromium: 6/6 scenarios pass
+  -> Firefox:  6/6 scenarios pass
+  -> combined: 12/12 scenarios pass
+  -> WebKit: launch blocked before test execution because this Arch host lacks
+             Playwright fallback dependencies libicu74, libxml2, and libflite1
 ```
 
 The code/type/unit/integration/build gates are green. Browser runtime evidence is
-green for Chromium and Firefox; WebKit remains a CI/configured target rather than
-local execution evidence on this Arch host because Playwright's fallback Ubuntu
-build requires host libraries that are not installed here. A real two-account Signal smoke test also
-remains external release evidence rather than a local CI claim.
+green for Chromium and Firefox. WebKit remains a configured target rather than
+local execution evidence on this host; the suite was not weakened or skipped to
+hide the missing runtime libraries. A real two-account linked-device Signal smoke
+test also remains external production evidence rather than a local CI claim.
 
-The test suite includes the real cross-package path:
+The integration suite now contains both deliberately deterministic access-control
+coverage and a production-style encrypted mock-Signal path:
 
 ```text
-CollaborativeDocument
-  -> ProtocolEnvelope
-  -> encodeEnvelope()
-  -> DeterministicTransportNetwork
-  -> decodeEnvelope()
-  -> DedupCache
-  -> CollaborativeDocument.applyChanges()
+IdentityClient.register()/openSession()
+  -> recipient-bound X25519/HKDF/AES-GCM + Ed25519 envelope
+  -> MockSignalTransport
+  -> ephemeral toy Signal WebSocket fanout
+  -> recipient IdentityClient.decryptEnvelope()
+  -> CollaborativeClient / DocumentSession
+  -> CRDT apply
+  -> convergence
 ```
 
-and verifies malformed wire data is rejected before CRDT application.
+The persistent-browser restart scenario separately proves document/identity state,
+the durable seen-message ledger, and queued outbound replay survive a full profile
+close/reopen.
 
 ## 4. `@e2e-col/core`
 
@@ -399,19 +406,19 @@ Now covered at baseline level:
 
 Still `MISSING` or `PARTIAL`:
 
-- crash between local snapshot persistence and outbound enqueue;
-- IndexedDB migration/corruption fixture;
-- durable attempted-queue replay fixture;
-- snapshot/checkpoint recovery scenario;
-- broader fake `signal-cli` HTTP RPC + SSE integration coverage beyond the current
-  parser/reconnect unit cases;
+- IndexedDB corruption fixture and typed recoverable corruption error path;
 - opt-in real Signal two-machine smoke profile;
-- access-control/adversarial frame scenarios.
+- broader access-control/adversarial frame scenarios.
+
+Now verified include atomic snapshot+outbound rollback, durable attempted-queue
+restart replay, snapshot/checkpoint recovery from a known dropped increment, and
+toy signal-cli HTTP JSON-RPC/SSE contract coverage including two-sidecar chunked
+round trips.
 
 ## 8. `@e2e-col/storage`
 
-Overall status: **PARTIAL: a useful memory/IndexedDB baseline now exists, but the
-target crash-safe durability contract is not complete**.
+Overall status: **DONE for the current durable client contract; broader
+corruption-recovery hardening remains**.
 
 ### 8.1 Implemented baseline
 
@@ -421,6 +428,8 @@ Current exports include:
 StoredDocument
 OutboundRecord
 CollaborativeStorage
+DurableCollaborativeStorage
+SeenMessage
 MemoryCollaborativeStorage
 IndexedDbStorageOptions
 IndexedDbCollaborativeStorage
@@ -433,22 +442,25 @@ IndexedDbCollaborativeStorage
 - document listing/deletion;
 - outbound listing/removal;
 - defensive byte cloning;
-- fake-IndexedDB tests for snapshots and outbound records.
+- atomic post-edit snapshot + outbound commits;
+- durable inbound seen-message ledger with configurable TTL pruning;
+- durable send-attempt metadata and safe checkpoint-driven queue compaction;
+- schema-v3 migration adding the `seenAt` pruning index;
+- fake-IndexedDB tests for snapshots, outbound records, atomic rollback,
+  restart dedup, TTL expiry, and migration.
 
-### 8.2 Important semantic gaps
+### 8.2 Remaining storage hardening
 
-`MISSING`:
+`REMAINING`:
 
-- one atomic transaction that commits the post-edit snapshot **and** all outbound
-  envelopes from that edit;
-- persistent inbound seen-message/dedup ledger;
-- durable send-attempt/retry metadata;
-- safe checkpoint-driven queue compaction;
-- explicit migration/corruption recovery tests.
+- corruption fixtures for malformed/incompatible durable state with a typed,
+  recoverable storage error path;
+- production retry/backoff policy above the persisted attempt counters.
 
-The current methods perform document and outbound writes as separate operations.
-That means a crash boundary can still exist between persistence of visible local
-state and persistence of the corresponding outbound work.
+`commitLocalChange()`, `persistRemoteState()`, and `commitAccessChange()` use
+multi-store transactions and explicitly abort on synchronous write-setup
+failure. `DocumentSession` consults `hasSeen()` before applying an inbound frame,
+and prunes expired durable IDs before it subscribes/connects on open.
 
 The current `acknowledgeOutbound(id)` physically removes a record. In the target
 contract, callers MUST NOT use a successful `transport.send()` alone as proof
@@ -457,33 +469,20 @@ received or merged the message.
 
 ### App guidance
 
-Apps may use the current storage classes for local prototypes, but app-facing
-architecture SHOULD depend on the target `DurableCollaborativeStorage` extension
-from `TARGET-API-SPEC.md`. The existing class/interface names are intentionally
-retained so the implementation can be strengthened additively.
+Apps SHOULD depend on `DurableCollaborativeStorage`; both memory and IndexedDB
+implementations satisfy that interface for the current client SDK.
 
 ## 9. `@e2e-col/client`
 
-Overall status: **package MISSING, but `apps/web/src/session.ts` is now a concrete
-precursor that proves the composition path**.
+Overall status: **DONE for the current reusable client/session baseline**.
 
-`BrowserReplicaSession` currently composes the real core, protocol, IndexedDB
-storage, and shared transport packages. It loads a saved snapshot, validates and
-deduplicates inbound envelopes, creates encoded envelopes for local changes,
-queues outbound records, and replays records on connect.
+`@e2e-col/client` now provides `CollaborativeClient` + `DocumentSession` and
+composes the real core, protocol, durable storage, identity adapter, and shared
+transport packages. It validates and durably deduplicates inbound envelopes,
+uses atomic local persistence, replays durable outbound work, enforces access
+state, and publishes/merges recovery snapshots.
 
-That is strong implementation evidence for the proposed client facade, but it is
-not yet the reusable/stable app API because:
-
-- it is web-app-local rather than `@e2e-col/client`;
-- subscriptions expose plain text rather than `DocumentView` + `SessionStatus`;
-- storage + outbound enqueue is not atomic;
-- it removes queued outbound records immediately after `transport.send()`;
-- dedup state is only in memory;
-- snapshot/checkpoint recovery is absent;
-- access-state projection is absent.
-
-Required target work:
+Current public baseline:
 
 ```text
 CollaborativeClient
@@ -498,15 +497,6 @@ reconnect replay
 snapshot recovery
 access-state projection
 ```
-
-### Why this should be the next API-first implementation
-
-If this facade is frozen early, multiple applications can build against the same
-session contract while storage and Signal integration are implemented in
-parallel.
-
-Without it, every app is likely to duplicate protocol/persistence/reconnect logic
-and become expensive to migrate.
 
 ## 10. `apps/sidecar`
 
@@ -555,18 +545,18 @@ The review follow-ups now implemented include:
 
 Still `MISSING` or requiring stronger evidence:
 
-- retryable-versus-terminal Signal error classification is still coarse;
-- broader fake-`signal-cli` HTTP RPC + streaming SSE fault integration tests;
+- retryable-versus-terminal real Signal error classification is still coarse;
 - real linked-device Signal E2E.
 
 ### 10.3 Test gate
 
-`bridge.test.ts` and `signal-cli.test.ts` cover bridge send/receive, malformed
-browser frames, duplicate Signal delivery, chunk/retry/origin behavior, event
-parsing, account filtering, and reconnect behavior. Root Vitest now includes
-`apps/**/*.test.ts`. `npm run test:sidecar` passes 13/13 tests, but the reconnect
-case times out when run inside the complete parallel `npm test` suite while
-passing in isolation. That concurrency-sensitive test/gate issue remains open.
+The toy contract gate is runnable and green. `contract.test.ts` /
+`contract-api.test.ts` verify health, JSON-RPC group/send/error semantics and SSE;
+`signal-cli.test.ts` covers health failure, event parsing, account filtering and
+reconnect; `bridge.test.ts` covers namespace/chunk/dedup/retry/origin behavior;
+and `sidecar-e2e.test.ts` drives two real sidecars through an ephemeral toy daemon
+over HTTP/SSE, including chunk reassembly and injected retry. Phase-2 focused
+verification passes these five files together.
 
 ### Security gate
 
@@ -629,28 +619,28 @@ orchestration path.
 
 ## 12. Snapshot/checkpoint recovery
 
-Overall status: **PARTIAL foundation, MISSING end-to-end behavior**.
+Overall status: **DONE for provable recovery signals; generic v1 sequence-gap
+inference is intentionally unsupported**.
 
-Already present:
+Implemented and verified:
 
-- `snapshot` protocol kind;
-- CRDT complete `save()` snapshots;
-- transport recovery signal;
-- chunking/reassembly;
-- offline replay simulation.
+- `CollaborativeDocument.mergeSnapshot()` full-state merge;
+- durable snapshot publication/retention through `DocumentSession.publishSnapshot()`
+  and transport recovery signals;
+- atomic checkpoint persistence with a replayable retained snapshot;
+- CRDT-only queue/history compaction that preserves membership/archive/delete
+  records;
+- writer/admin checkpoint publication plus reader recovery;
+- deterministic dropped-increment -> recovery -> snapshot -> convergence;
+- recovery flags clear only after checkpoint publication or accepted snapshot
+  merge, not after an unrelated successful send.
 
-Missing:
-
-- `CollaborativeDocument.mergeSnapshot()`;
-- durable snapshot publication/retention policy;
-- persistent checkpoint metadata;
-- safe queue/history compaction;
-- recovery orchestration in a client session;
-- restart + dropped-history integration test.
-
-This is the remaining semantic gap in Track C's R3 exit criterion: the transport
-can detect/surface loss in tests, but the system does not yet repair it using a
-real snapshot/checkpoint path.
+The current envelope `sequence` cannot safely prove a missing CRDT increment: it
+is optional, session-local/resettable, spans non-CRDT logical kinds, and lacks a
+sender epoch or predecessor chain. The strongest safe baseline therefore reacts
+to trustworthy transport recovery signals. Production signal-cli integration must
+surface such known-loss/reset conditions, or a future protocol version must add
+causal predecessor metadata before receiver-side gap detection is enabled.
 
 ## 13. Access control and lifecycle semantics
 
@@ -833,14 +823,13 @@ The repository has moved beyond a conceptual PoC: the CRDT, protocol framing,
 deterministic/WebSocket transport, storage baseline, app-local session
 orchestration, and first Signal sidecar bridge are now real code.
 
-The remaining work is primarily **making those pieces safe and stable as an app
-platform**: atomic durability, persistent dedup/checkpoints, extraction of the
-session facade, snapshot recovery, sidecar hardening/real-Signal evidence, and
-authenticated access semantics.
+The remaining work is primarily **production-boundary hardening**: real
+`signal-cli` integration/evidence, authenticated access-control review and causal
+replay semantics, storage corruption recovery, richer offline UX, and later
+feature/platform work. Atomic local durability, durable dedup, checkpoint recovery,
+and the reusable `@e2e-col/client` session facade are now implemented baselines.
 
-For app designers, the highest-leverage missing surface is the reusable
-`@e2e-col/client` / `DocumentSession` contract. `@e2e-col/storage` no longer needs
-to be invented from scratch; it needs to be strengthened into the target
-`DurableCollaborativeStorage` semantics underneath that facade. This lets app
-projects begin against stable view/status/access seams without taking ownership
-of protocol, IndexedDB, retry, or Signal details.
+Application teams can build against `DocumentSession` plus
+`DurableCollaborativeStorage` without owning protocol, IndexedDB, checkpoint, or
+mock-Signal orchestration details. Production release claims must still wait for
+the real Signal and R6 security gates.

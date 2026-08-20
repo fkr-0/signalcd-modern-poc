@@ -212,10 +212,11 @@ Exit criteria:
 
 ### R3 — transport simulation and resilience
 
-**Status: substantially implemented (Track C, 2026-08-19).** Deterministic
-faults, offline queues, metrics, recovery signaling, and WebSocket transport are
-present. Automatic snapshot/checkpoint recovery after a loss signal remains an
-R4/R8 follow-up.
+**Status: implemented for provable loss signals (Track C + Phase 2, 2026-08-20).**
+Deterministic faults, offline queues, metrics, recovery signaling, WebSocket
+transport, and automatic durable snapshot/checkpoint repair are present. The v1
+logical envelope sequence is intentionally not used as a generic gap detector
+because it is session-local/resettable and lacks causal predecessor metadata.
 
 Deliverables:
 
@@ -253,15 +254,22 @@ Exit criteria:
 
 ### R5 — Signal sidecar
 
-**Status: implementation complete for the `0.0.1` contract (Track E,
-2026-08-19); live Signal interoperability evidence pending.** The localhost
-sidecar validates protocol frames, chunks/deduplicates Signal bodies, retries
-sends, exposes health, and integrates with signal-cli HTTP JSON-RPC/SSE.
+**Status: production adapter boundary audited against signal-cli v0.14.7
+(Track E + Phase 3, 2026-08-20); live Signal interoperability evidence pending.**
+The localhost sidecar validates protocol frames, maps configured UUIDs to
+pre-existing Signal groups, verifies daemon health/group visibility, performs a
+non-fatal best-effort version probe, requires an initial usable SSE subscription,
+parses automatic/manual/sync receive forms, validates documented send responses,
+chunks/deduplicates bounded Signal bodies, retries sends, and integrates with
+signal-cli HTTP JSON-RPC/SSE. Ambiguous send outcomes remain ordinary transport
+failures; recovery code `4409` is reserved for explicit backend proof of history
+risk and is not inferred by the real HTTP adapter. The runtime deliberately does
+not provision accounts or mutate groups.
 
 Deliverables:
 
 - current `signal-cli` API verification;
-- linked-device bootstrap and health checks;
+- pre-linked account selection, group visibility, health, and best-effort version checks;
 - localhost WebSocket API;
 - send/receive bridge using protocol envelopes;
 - chunking and dedup;
@@ -275,7 +283,11 @@ Exit criteria:
 
 ### R6 — paper-level access semantics
 
-**Status: planned after `0.0.1`.**
+**Status: partial.** Signed membership/archive/delete enforcement, role checks,
+durable access state, and replay dedup are implemented. The remaining security
+boundary is monotonic/causal authorization: bounded seen-message TTL alone cannot
+prevent a sufficiently old authenticated control frame from becoming effective
+again after its dedup entry expires.
 
 Deliverables:
 
@@ -405,18 +417,21 @@ depends_on:
 
 ### Track E — Signal sidecar
 
-**Status: implemented and locally contract-tested; real Signal smoke pending.**
+**Status: implemented, production-contract-audited, and locally contract-tested;
+real Signal smoke profile exists but fixture evidence is pending.**
 
 ```yaml
 paths:
   - apps/sidecar/**
   - tests/integration/signal-*.test.ts
 tasks:
-  - verify current signal-cli daemon API
+  - verify signal-cli v0.14.7 daemon API and JSON-RPC/SSE shapes
   - sidecar process lifecycle
   - localhost WebSocket API
   - Signal send/receive bridge
-  - chunk/dedup/retry integration
+  - configured final-body chunk boundary plus chunk/dedup/retry integration
+  - explicit pre-signal-cli-acceptance recovery signaling
+  - skip-by-default two-account real Signal smoke profile
 depends_on:
   - protocol package
   - transport interface
@@ -442,7 +457,7 @@ depends_on:
 
 ### Track G — test and release harness
 
-**Status: implemented (2026-08-19).** The reusable testing package now composes the real core and deterministic transport, includes upstream-derived fast/slow latency profiles, and verifies concurrency, duplicate/reorder, offline catch-up, and recovery signaling. Playwright verifies browser-to-browser replica synchronization, and CI contains verify, benchmark-scenario, browser-E2E, and tag release gates.
+**Status: implemented and extended through Phase 3 (2026-08-20).** The reusable testing package composes the real core and deterministic transport, includes upstream-derived fast/slow latency profiles, and verifies concurrency, duplicate/reorder, offline catch-up, recovery signaling, and dropped-increment checkpoint repair. Production-style Vitest evidence exercises real IdentityClient encryption over MockSignalTransport; sidecar tests now separately audit the signal-cli v0.14.7 boundary and expose an opt-in two-account live profile. Playwright verifies encrypted browser convergence plus persistent-profile restart/queue/dedup recovery in Chromium and Firefox. CI remains deterministic and does not require Signal credentials.
 
 ```yaml
 paths:

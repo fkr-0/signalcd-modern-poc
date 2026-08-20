@@ -36,6 +36,13 @@ export interface SeenMessage {
   readonly seenAt: number
 }
 
+export const DEFAULT_SEEN_MESSAGE_TTL_MS = 24 * 60 * 60 * 1000
+
+export interface SeenMessageRetentionOptions {
+  readonly seenMessageTtlMs?: number
+  readonly now?: () => number
+}
+
 export interface CheckpointPolicy {
   readonly safeRecordIds: readonly string[]
   readonly retainAtLeast?: number
@@ -74,7 +81,8 @@ export interface DurableCollaborativeStorage extends CollaborativeStorage, Acces
   }): Promise<void>
   markOutboundAttempt(recordIds: readonly string[], attemptedAt: number): Promise<void>
   compactOutbound(documentId: string, policy: CheckpointPolicy): Promise<void>
-  hasSeen(documentId: string, messageId: string): Promise<boolean>
+  hasSeen(documentId: string, messageId: string, now?: number): Promise<boolean>
+  pruneSeenMessages(now?: number): Promise<number>
 }
 
 export class MemoryCollaborativeStorage implements DurableCollaborativeStorage {
@@ -82,6 +90,13 @@ export class MemoryCollaborativeStorage implements DurableCollaborativeStorage {
   private readonly outbound = new Map<string, OutboundRecord>()
   private readonly access = new Map<string, DocumentAccessState>()
   private readonly seen = new Map<string, SeenMessage>()
+  private readonly seenMessageTtlMs: number
+  private readonly now: () => number
+
+  constructor(options: SeenMessageRetentionOptions = {}) {
+    this.seenMessageTtlMs = normalizeSeenMessageTtlMs(options.seenMessageTtlMs)
+    this.now = options.now ?? Date.now
+  }
 
   async loadDocument(documentId: string): Promise<StoredDocument | undefined> {
     const value = this.documents.get(documentId)
@@ -179,11 +194,32 @@ export class MemoryCollaborativeStorage implements DurableCollaborativeStorage {
       if (safe.has(record.id) && !keep.has(record.id)) this.outbound.delete(record.id)
   }
 
-  async hasSeen(documentId: string, messageId: string): Promise<boolean> {
-    return this.seen.has(seenKey(documentId, messageId))
+  async hasSeen(documentId: string, messageId: string, now = this.now()): Promise<boolean> {
+    const key = seenKey(documentId, messageId)
+    const value = this.seen.get(key)
+    if (!value) return false
+    if (this.isSeenMessageExpired(value, now)) {
+      this.seen.delete(key)
+      return false
+    }
+    return true
+  }
+
+  async pruneSeenMessages(now = this.now()): Promise<number> {
+    let removed = 0
+    for (const [key, value] of this.seen) {
+      if (!this.isSeenMessageExpired(value, now)) continue
+      this.seen.delete(key)
+      removed += 1
+    }
+    return removed
   }
 
   async close(): Promise<void> {}
+
+  private isSeenMessageExpired(value: SeenMessage, now: number): boolean {
+    return value.seenAt <= now - this.seenMessageTtlMs
+  }
 }
 
 export function cloneDocument(value: StoredDocument): StoredDocument {
@@ -207,4 +243,10 @@ export function cloneAccessState(value: DocumentAccessState): DocumentAccessStat
 
 function seenKey(documentId: string, messageId: string): string {
   return `${documentId}\u0000${messageId}`
+}
+
+export function normalizeSeenMessageTtlMs(value = DEFAULT_SEEN_MESSAGE_TTL_MS): number {
+  if (!Number.isSafeInteger(value) || value <= 0)
+    throw new Error('seenMessageTtlMs must be a positive safe integer')
+  return value
 }

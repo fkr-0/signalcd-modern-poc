@@ -1,9 +1,14 @@
 import type { DocumentParticipant } from '@e2e-col/protocol'
-import { MemoryCollaborativeStorage } from '@e2e-col/storage'
+import {
+  type DurableCollaborativeStorage,
+  IndexedDbCollaborativeStorage,
+  MemoryCollaborativeStorage
+} from '@e2e-col/storage'
 import { DeterministicTransportNetwork } from '@e2e-col/transport'
+import { indexedDB as fakeIndexedDb } from 'fake-indexeddb'
 import { describe, expect, it } from 'vitest'
 import { CollaborativeClient } from './client'
-import type { ClientIdentityAdapter } from './types'
+import type { ClientIdentityAdapter, RecoveryPolicy } from './types'
 
 const documentA = '11111111-1111-4111-8111-111111111111'
 const documentB = '22222222-2222-4222-8222-222222222222'
@@ -38,9 +43,10 @@ function identity(
 
 function createClient(options: {
   senderId?: string
-  storage?: MemoryCollaborativeStorage
+  storage?: DurableCollaborativeStorage
   network?: DeterministicTransportNetwork
   identity?: ClientIdentityAdapter
+  recovery?: RecoveryPolicy
 }) {
   const senderId = options.senderId ?? 'alice'
   const network = options.network ?? new DeterministicTransportNetwork()
@@ -48,7 +54,8 @@ function createClient(options: {
     senderId,
     storage: options.storage ?? new MemoryCollaborativeStorage(),
     identity: options.identity ?? identity(),
-    transportFactory: ({ documentId }) => network.createTransport(`${senderId}:${documentId}`)
+    transportFactory: ({ documentId }) => network.createTransport(`${senderId}:${documentId}`),
+    ...(options.recovery === undefined ? {} : { recovery: options.recovery })
   })
 }
 
@@ -103,6 +110,144 @@ describe('CollaborativeClient and DocumentSession', () => {
     await tick()
     expect(bobSession.getView().text).toBe('manual convergence')
     expect(aliceSession.getStatus().pendingOutbound).toBe(0)
+
+    await alice.close()
+    await bob.close()
+  })
+
+  it('does not reapply a durable duplicate control frame after IndexedDB restart', async () => {
+    const network = new DeterministicTransportNetwork()
+    const storageAlice = new MemoryCollaborativeStorage()
+    const bobStorageName = `e2e-col-client-restart-dedup-${crypto.randomUUID()}`
+    const participants: readonly DocumentParticipant[] = [
+      { participantId: 'alice', role: 'admin', active: true },
+      { participantId: 'bob', role: 'writer', active: true }
+    ]
+    const alice = createClient({
+      senderId: 'alice',
+      network,
+      storage: storageAlice,
+      identity: identity(participants)
+    })
+    const firstBobStorage = new IndexedDbCollaborativeStorage({
+      name: bobStorageName,
+      indexedDB: fakeIndexedDb
+    })
+    const aliceSession = await alice.createDocument({ documentId: documentA })
+    const aliceStored = await storageAlice.loadDocument(documentA)
+    if (!aliceStored) throw new Error('alice document was not persisted')
+    await firstBobStorage.saveDocument(aliceStored)
+
+    await aliceSession.archive()
+    const archiveRecord = (await storageAlice.listOutbound(documentA)).find(
+      (record) => record.kind === 'archive'
+    )
+    if (!archiveRecord) throw new Error('archive record was not retained for replay')
+    const duplicateWire = new Uint8Array(archiveRecord.payload)
+    await firstBobStorage.commitAccessChange({
+      documentId: documentA,
+      access: {
+        selfRole: 'writer',
+        participants,
+        archived: true,
+        deleted: false,
+        revision: 1
+      },
+      outbound: [],
+      seen: [
+        {
+          documentId: documentA,
+          messageId: archiveRecord.id,
+          seenAt: Date.now()
+        }
+      ]
+    })
+    await firstBobStorage.close()
+
+    const reopenedBobStorage = new IndexedDbCollaborativeStorage({
+      name: bobStorageName,
+      indexedDB: fakeIndexedDb
+    })
+    const reopenedBob = createClient({
+      senderId: 'bob',
+      network,
+      storage: reopenedBobStorage,
+      identity: identity(participants)
+    })
+    const reopenedBobSession = await reopenedBob.openDocument(documentA)
+    expect(reopenedBobSession.getAccessState()).toMatchObject({ archived: true, revision: 1 })
+
+    const replay = network.createTransport('duplicate-replay')
+    await replay.connect(documentA)
+    await replay.send(duplicateWire)
+    network.flush()
+    await tick()
+    expect(reopenedBobSession.getAccessState()).toMatchObject({ archived: true, revision: 1 })
+
+    await replay.close()
+    await reopenedBob.close()
+    await alice.close()
+  })
+
+  it('keeps recovery required after unrelated send completion until a checkpoint repairs loss', async () => {
+    const network = new DeterministicTransportNetwork({
+      faults: [
+        {
+          send: 1,
+          from: `alice:${documentA}`,
+          to: `bob:${documentA}`,
+          drop: true
+        }
+      ]
+    })
+    const storageAlice = new MemoryCollaborativeStorage()
+    const storageBob = new MemoryCollaborativeStorage()
+    const participants: readonly DocumentParticipant[] = [
+      { participantId: 'alice', role: 'admin', active: true },
+      { participantId: 'bob', role: 'writer', active: true }
+    ]
+    const alice = createClient({
+      senderId: 'alice',
+      network,
+      storage: storageAlice,
+      identity: identity(participants),
+      recovery: { publishSnapshotOnRecoverySignal: false }
+    })
+    const bob = createClient({
+      senderId: 'bob',
+      network,
+      storage: storageBob,
+      identity: identity(participants),
+      recovery: { publishSnapshotOnRecoverySignal: false }
+    })
+    const aliceSession = await alice.createDocument({ documentId: documentA })
+    const aliceStored = await storageAlice.loadDocument(documentA)
+    if (!aliceStored) throw new Error('alice document was not persisted')
+    await storageBob.saveDocument(aliceStored)
+    await storageBob.saveAccessControl(documentA, {
+      selfRole: 'writer',
+      participants,
+      archived: false,
+      deleted: false,
+      revision: 0
+    })
+    const bobSession = await bob.openDocument(documentA)
+
+    await aliceSession.editText('known lost increment')
+    network.flush()
+    await tick()
+
+    expect(aliceSession.getStatus()).toMatchObject({ phase: 'recovering', recoveryRequired: true })
+    expect(bobSession.getStatus()).toMatchObject({ phase: 'recovering', recoveryRequired: true })
+    expect(bobSession.getView().text).toBe('')
+
+    await aliceSession.publishSnapshot()
+    network.flush()
+    await tick()
+
+    expect(bobSession.getView().text).toBe('known lost increment')
+    expect(aliceSession.getStatus().recoveryRequired).toBe(false)
+    expect(bobSession.getStatus().recoveryRequired).toBe(false)
 
     await alice.close()
     await bob.close()

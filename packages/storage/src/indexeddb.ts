@@ -5,16 +5,19 @@ import {
   cloneDocument,
   cloneOutbound,
   type DurableCollaborativeStorage,
+  normalizeSeenMessageTtlMs,
   type OutboundRecord,
   type SeenMessage,
+  type SeenMessageRetentionOptions,
   type StoredDocument
 } from './storage'
 
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 const DOCUMENTS = 'documents'
 const OUTBOUND = 'outbound'
 const ACCESS_CONTROL = 'access_control'
 const SEEN = 'seen_messages'
+const SEEN_BY_TIME = 'by_seen_at'
 
 interface StoredAccessControl {
   readonly documentId: string
@@ -25,17 +28,21 @@ interface StoredSeenMessage extends SeenMessage {
   readonly key: string
 }
 
-export interface IndexedDbStorageOptions {
+export interface IndexedDbStorageOptions extends SeenMessageRetentionOptions {
   readonly name?: string
   readonly indexedDB?: IDBFactory
 }
 
 export class IndexedDbCollaborativeStorage implements DurableCollaborativeStorage {
   private readonly dbPromise: Promise<IDBDatabase>
+  private readonly seenMessageTtlMs: number
+  private readonly now: () => number
 
   constructor(options: IndexedDbStorageOptions = {}) {
     const factory = options.indexedDB ?? globalThis.indexedDB
     if (!factory) throw new Error('IndexedDB is unavailable')
+    this.seenMessageTtlMs = normalizeSeenMessageTtlMs(options.seenMessageTtlMs)
+    this.now = options.now ?? Date.now
     this.dbPromise = openDatabase(factory, options.name ?? 'e2e-col')
   }
 
@@ -216,15 +223,55 @@ export class IndexedDbCollaborativeStorage implements DurableCollaborativeStorag
     await complete(tx)
   }
 
-  async hasSeen(documentId: string, messageId: string): Promise<boolean> {
-    const value = await request<StoredSeenMessage | undefined>(
-      (await this.dbPromise).transaction(SEEN).objectStore(SEEN).get(seenKey(documentId, messageId))
-    )
-    return value !== undefined
+  async hasSeen(documentId: string, messageId: string, now = this.now()): Promise<boolean> {
+    const db = await this.dbPromise
+    const tx = db.transaction(SEEN, 'readwrite')
+    const done = complete(tx)
+    const store = tx.objectStore(SEEN)
+    const key = seenKey(documentId, messageId)
+    const value = await request<StoredSeenMessage | undefined>(store.get(key))
+    const expired = value !== undefined && this.isSeenMessageExpired(value, now)
+    if (expired) store.delete(key)
+    await done
+    return value !== undefined && !expired
+  }
+
+  async pruneSeenMessages(now = this.now()): Promise<number> {
+    const db = await this.dbPromise
+    const tx = db.transaction(SEEN, 'readwrite')
+    const done = complete(tx)
+    const index = tx.objectStore(SEEN).index(SEEN_BY_TIME)
+    const cutoff = now - this.seenMessageTtlMs
+    let removed = 0
+    const cursorDone = new Promise<void>((resolve, reject) => {
+      const cursorRequest = index.openCursor()
+      cursorRequest.onsuccess = () => {
+        const cursor = cursorRequest.result
+        if (!cursor) {
+          resolve()
+          return
+        }
+        if (Number(cursor.key) > cutoff) {
+          resolve()
+          return
+        }
+        cursor.delete()
+        removed += 1
+        cursor.continue()
+      }
+      cursorRequest.onerror = () =>
+        reject(cursorRequest.error ?? new Error('IndexedDB seen-message pruning failed'))
+    })
+    await Promise.all([cursorDone, done])
+    return removed
   }
 
   async close(): Promise<void> {
     ;(await this.dbPromise).close()
+  }
+
+  private isSeenMessageExpired(value: SeenMessage, now: number): boolean {
+    return value.seenAt <= now - this.seenMessageTtlMs
   }
 }
 
@@ -238,7 +285,10 @@ function openDatabase(factory: IDBFactory, name: string): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(OUTBOUND)) db.createObjectStore(OUTBOUND, { keyPath: 'id' })
       if (!db.objectStoreNames.contains(ACCESS_CONTROL))
         db.createObjectStore(ACCESS_CONTROL, { keyPath: 'documentId' })
-      if (!db.objectStoreNames.contains(SEEN)) db.createObjectStore(SEEN, { keyPath: 'key' })
+      const seen = db.objectStoreNames.contains(SEEN)
+        ? openRequest.transaction!.objectStore(SEEN)
+        : db.createObjectStore(SEEN, { keyPath: 'key' })
+      if (!seen.indexNames.contains(SEEN_BY_TIME)) seen.createIndex(SEEN_BY_TIME, 'seenAt')
     }
     openRequest.onsuccess = () => resolve(openRequest.result)
     openRequest.onerror = () => reject(openRequest.error ?? new Error('IndexedDB open failed'))

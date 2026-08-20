@@ -19,10 +19,10 @@
 
 progress:
   last_audit: "2026-08-20"
-  overall: "P1-P4 DONE; P5-P7 PARTIAL"
+  overall: "P1-P5 DONE; P6-P7 PARTIAL"
 
   audit_gate:
-    pnpm_run_check: "PASS — version sync, typecheck, Biome lint/format, 80 Vitest files / 744 tests, production build"
+    pnpm_run_check: "PASS — version sync, typecheck, Biome lint/format, 93 Vitest files / 804 tests, production build"
     playwright_e2e: >
       NOT_REVERIFIED in this audit: the suite could not start because 127.0.0.1:18080
       was already occupied by the separate live TETRA decode. The encrypted two-browser
@@ -118,14 +118,15 @@ progress:
             client.test.ts verifies independent sessions and persisted metadata.
 
     P5_debug_tooling:
-      status: "PARTIAL"
+      status: "DONE"
       deliverables:
         - item: "Debug decrypt mode"
-          status: partial
+          status: done
           evidence: >
-            EncryptedMessageRouter has explicit debugDecrypt gating and a DebugEnvelopeDecryptor hook,
-            but the normal toy daemon does not install a decryptor. Toggling /__toy__/v1/config alone
-            therefore does not yet prove plaintext inspection of real encrypted traffic.
+            DebugObserverManager now owns a toy-only observer key, browser encryption produces a separately
+            authenticated observer copy, and EncryptedMessageRouter decrypts that copy only while debugDecrypt
+            is enabled. debug-observer tests verify real plaintext recovery, binding/signature rejection, and
+            key rotation; contract-api.test.ts verifies runtime true->false config transitions and health state.
         - item: "Structured sync log"
           status: done
           evidence: >
@@ -137,8 +138,10 @@ progress:
         - item: "Export and filtering"
           status: done
           evidence: "SyncLogPanel filters level/direction and exports JSON; server exposes complete JSON export"
-      gaps:
-        - "Wire a real debugEnvelopeDecryptor into toy daemon debug mode and add encrypted-traffic plaintext verification"
+      verification_note: >
+        GET /__toy__/v1/sync-log, ?since=, and /export are covered at API level; the exported entry contract
+        includes timestamp, level, direction, senderPhone, recipientPhone, documentId, envelopeKind, messageId,
+        and debug-only preview/signatureValid fields. Startup diagnostics also emit the exact debug warning to stderr.
 
     P6_production_readiness:
       status: "PARTIAL"
@@ -177,18 +180,20 @@ progress:
         - item: "Inspector core"
           status: done
           evidence: >
-            apps/web/src/Dashboard.tsx and dashboard.css provide the sidebar/main/bottom layout,
-            identity/group/transport readouts, and workspace integration.
+            apps/web/src/Dashboard.tsx and dashboard.css provide the sidebar/main/bottom layout and workspace
+            integration. CollaborativeWorkspace now passes the active ObservableCollaborativeTransport so the
+            identity fields, MockSignalTransport group members, and transport metrics come from live runtime data.
         - item: "Read-only inspector event stream"
           status: done
           evidence: >
             apps/web/src/inspector-events.ts implements a bounded sanitized event store,
             transport instrumentation, and sidecar sync-event adaptation; inspector-events.test.ts passes.
         - item: "Data pipeline visualization"
-          status: partial
+          status: done
           evidence: >
-            Outbound/inbound chains, expandable nodes, latest-message highlighting, and measured metadata exist;
-            dedicated pipeline-run history and direct dedup/crdt_apply observations are not complete.
+            Dashboard.tsx renders the actual outbound crdt_change->envelope->sign->encrypt->fanout_frame->transport_send
+            and inbound transport_receive->fanout_decode->decrypt->verify->envelope_decode->dedup->crdt_apply chains.
+            Nodes are expandable and the display is updated from the real inspector/sync-log event stream.
         - item: "Traffic log"
           status: partial
           evidence: >
@@ -198,10 +203,11 @@ progress:
           status: not_started
           evidence: "Dashboard.tsx does not consume /__toy__/v1/state or expose fault injection controls"
         - item: "Guided view"
-          status: partial
+          status: done
           evidence: >
-            Ctrl+Shift+G/localStorage toggle, pipeline annotations, concept help, source links, and key explainers exist;
-            the live operation-walkthrough sidebar is not implemented.
+            Ctrl+Shift+G/localStorage toggle, one-line pipeline annotations, concept help, key explainers, and
+            per-operation SPRING/EPFL paper-section badges are wired to the same live event stream. A richer narrated
+            walkthrough remains an optional Appendix extension rather than a blocker for the current guided-view contract.
         - item: "Recorded session replay"
           status: not_started
           evidence: "No dashboard session recording/replay implementation exists"
@@ -225,18 +231,20 @@ progress:
     - id: ISSUE-4
       severity: medium
       description: "Toy debug-decrypt toggle has no production daemon decryptor implementation"
-      status: open
-      note: "DebugEnvelopeDecryptor is optional and is not supplied by apps/toy-signal-cli/src/main.ts"
+      status: fixed
+      note: >
+        Toy-only DebugObserverManager now provides the explicit observer-key/decrypt path; debug-observer and
+        contract tests verify plaintext recovery and runtime enable/disable without exposing browser private keys.
 
   test_coverage:
-    last_pnpm_check: "PASS — 80 Vitest files / 744 tests"
+    last_pnpm_check: "PASS — 93 Vitest files / 804 tests"
     packages/identity: "4 test files"
     packages/protocol: "2 test files"
     packages/transport: "4 test files"
-    packages/storage: "2 test files"
-    packages/client: "1 test file"
+    packages/storage: "3 source test files (including IndexedDB atomicity)"
+    packages/client: "3 source test files (including lifecycle and E2EE integration)"
     packages/testing: "2 test files"
-    apps/toy-signal-cli: "6 test files"
+    apps/toy-signal-cli: "11 source test files"
     apps/sidecar: "2 test files"
     apps/web: "1 test file (inspector-events.test.ts)"
     playwright: >
@@ -1699,11 +1707,11 @@ appendix_P7:
 
     - id: P7.2
       name: "Data pipeline visualization"
-      status: "PARTIAL"
+      status: "DONE"
       evidence: >
-        Dashboard.tsx renders outbound/inbound chains with expandable measured detail and latest-message
-        highlighting. inspector-events.ts plus client-adapter.ts instrument the real path. A dedicated
-        selectable history of prior pipeline runs and direct dedup/crdt_apply observations remain.
+        Dashboard.tsx renders the exact outbound and inbound transformation chains with expandable measured detail,
+        bounded recent event history, and latest-message highlighting. inspector-events.ts plus client-adapter.ts
+        instrument the real path and SyncLogClient supplies real-time sidecar events.
       deliverables:
         - "Horizontal pipeline with outbound and inbound node chains"
         - "Node expand/collapse with data detail (envelope JSON, hex dumps)"
@@ -1738,9 +1746,9 @@ appendix_P7:
       name: "Guided view overlay"
       status: "PARTIAL"
       evidence: >
-        Dashboard.tsx implements the Ctrl+Shift+G/localStorage toggle, pipeline annotations,
-        concept help/tooltips, source links, and key explainers. The live operation-walkthrough sidebar
-        is still missing.
+        The current acceptance slice is complete: Dashboard.tsx implements the Ctrl+Shift+G/localStorage toggle,
+        one-line pipeline annotations, concept help/tooltips, key explainers, and SPRING/EPFL paper-section badges.
+        The Appendix's additional live operation-walkthrough sidebar remains a future enhancement.
       deliverables:
         - "Toggle switch in dashboard header (Ctrl+Shift+G)"
         - "Pipeline node annotations (one-line explanations + paper badges)"

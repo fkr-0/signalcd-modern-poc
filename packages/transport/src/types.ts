@@ -20,7 +20,7 @@ export interface TransportRecoveryRequired {
   readonly sourceId: string
   readonly targetId: string
   readonly sendSequence: number
-  readonly reason: 'dropped-frame'
+  readonly reason: 'dropped-frame' | 'sidecar-history-risk'
 }
 
 export type TransportRecoveryListener = (event: TransportRecoveryRequired) => void

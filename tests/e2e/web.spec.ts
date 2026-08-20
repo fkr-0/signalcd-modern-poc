@@ -1,4 +1,4 @@
-import { expect, type Page, test } from '@playwright/test'
+import { chromium, expect, firefox, type Page, test, webkit } from '@playwright/test'
 
 const toyPort = process.env.E2E_COL_TEST_TOY_PORT ?? '18080'
 const toyBaseUrl = `http://127.0.0.1:${toyPort}`
@@ -74,6 +74,68 @@ async function createEncryptedGroup(
   })
   expect(memberResponse.status).toBe(200)
   return created.group_id
+}
+
+async function collaborationStorageState(
+  page: Page,
+  userId: string,
+  documentId: string
+): Promise<{
+  readonly documentCount: number
+  readonly outbound: readonly { id: string; kind: string; state: string; attempts?: number }[]
+  readonly seen: readonly { messageId: string; seenAt: number }[]
+}> {
+  return page.evaluate(
+    async ({ databaseName, targetDocumentId }) => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open(databaseName)
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () =>
+          reject(request.error ?? new Error('collaboration database open failed'))
+      })
+      const readAll = <T>(storeName: string) =>
+        new Promise<T[]>((resolve, reject) => {
+          const request = db.transaction(storeName).objectStore(storeName).getAll()
+          request.onsuccess = () => resolve(request.result as T[])
+          request.onerror = () =>
+            reject(request.error ?? new Error(`failed to read collaboration store ${storeName}`))
+        })
+      const [documents, outbound, seen] = await Promise.all([
+        readAll<{ documentId: string }>('documents'),
+        readAll<{
+          id: string
+          documentId: string
+          kind: string
+          state: string
+          attempts?: number
+        }>('outbound'),
+        readAll<{ documentId: string; messageId: string; seenAt: number }>('seen_messages')
+      ])
+      db.close()
+      return {
+        documentCount: documents.filter((entry) => entry.documentId === targetDocumentId).length,
+        outbound: outbound
+          .filter((entry) => entry.documentId === targetDocumentId)
+          .map(({ id, kind, state, attempts }) => ({
+            id,
+            kind,
+            state,
+            ...(attempts === undefined ? {} : { attempts })
+          })),
+        seen: seen
+          .filter((entry) => entry.documentId === targetDocumentId)
+          .map(({ messageId, seenAt }) => ({ messageId, seenAt }))
+      }
+    },
+    { databaseName: `e2e-col-${userId}`, targetDocumentId: documentId }
+  )
+}
+
+function persistentBrowserType(browserName: string) {
+  if (browserName === 'chromium') return chromium
+  if (browserName === 'firefox') return firefox
+  if (browserName === 'webkit') return webkit
+  throw new Error(`unsupported Playwright browser ${browserName}`)
 }
 
 async function openEncryptedGroup(page: Page, groupId: string, documentId: string): Promise<void> {
@@ -335,5 +397,72 @@ test('two isolated browser clients converge through recipient-bound encrypted to
       headers: { 'content-type': 'application/json' },
       body: '{}'
     }).catch(() => undefined)
+  }
+})
+
+test('reopens the same persistent browser profile with document, queue replay, and durable dedup intact', async ({
+  browser,
+  browserName,
+  baseURL
+}, testInfo) => {
+  if (!baseURL) throw new Error('Playwright baseURL is required for persistent restart coverage')
+  const profileDir = testInfo.outputPath('persistent-profile')
+  const aliceContext = await browser.newContext()
+  const alicePage = await aliceContext.newPage()
+  const browserType = persistentBrowserType(browserName)
+  let bobContext = await browserType.launchPersistentContext(profileDir, { baseURL })
+
+  try {
+    const bobPage = bobContext.pages()[0] ?? (await bobContext.newPage())
+    await register(alicePage, `Persistent Alice ${browserName}`)
+    await register(bobPage, `Persistent Bob ${browserName}`)
+    const alice = await storedIdentity(alicePage)
+    const bob = await storedIdentity(bobPage)
+    const documentId = crypto.randomUUID()
+    const groupId = await createEncryptedGroup(alice, bob, documentId)
+    await Promise.all([
+      openEncryptedGroup(alicePage, groupId, documentId),
+      openEncryptedGroup(bobPage, groupId, documentId)
+    ])
+
+    const inboundText = `durable-seen-${documentId}`
+    await alicePage.locator('textarea').fill(inboundText)
+    await expect(bobPage.locator('textarea')).toHaveValue(inboundText)
+
+    await bobPage.getByLabel('Sync mode').selectOption('manual')
+    const pendingText = `${inboundText}\npending-across-profile-restart`
+    await bobPage.locator('textarea').fill(pendingText)
+    await expect(bobPage.getByTestId('pending-outbound')).toHaveText('1 pending')
+
+    const beforeRestart = await collaborationStorageState(bobPage, bob.userId, documentId)
+    expect(beforeRestart.documentCount).toBe(1)
+    expect(beforeRestart.outbound).toEqual([
+      expect.objectContaining({ kind: 'automerge-change', state: 'pending' })
+    ])
+    expect(beforeRestart.seen).toHaveLength(1)
+    const queuedId = beforeRestart.outbound[0]!.id
+    const seenMessageId = beforeRestart.seen[0]!.messageId
+
+    await bobContext.close()
+    bobContext = await browserType.launchPersistentContext(profileDir, { baseURL })
+    const reopenedBobPage = bobContext.pages()[0] ?? (await bobContext.newPage())
+    await openEncryptedGroup(reopenedBobPage, groupId, documentId)
+
+    const restoredBob = await storedIdentity(reopenedBobPage)
+    expect(restoredBob.userId).toBe(bob.userId)
+    expect(restoredBob.sessionToken).toBe(bob.sessionToken)
+    await expect(reopenedBobPage.locator('textarea')).toHaveValue(pendingText)
+    await expect(alicePage.locator('textarea')).toHaveValue(pendingText)
+
+    await expect
+      .poll(async () => collaborationStorageState(reopenedBobPage, bob.userId, documentId))
+      .toMatchObject({
+        documentCount: 1,
+        outbound: [expect.objectContaining({ id: queuedId, state: 'attempted', attempts: 1 })],
+        seen: [expect.objectContaining({ messageId: seenMessageId })]
+      })
+    await expect(reopenedBobPage.getByLabel('Sync mode')).toHaveValue('manual')
+  } finally {
+    await Promise.all([aliceContext.close(), bobContext.close()])
   }
 })
