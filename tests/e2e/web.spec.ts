@@ -12,7 +12,10 @@ async function register(page: Page, name: string) {
   try {
     await expect(workspaceHeading).toBeVisible()
   } catch {
-    const registrationError = await page.locator('.error-message').textContent().catch(() => undefined)
+    const registrationError = await page
+      .locator('.error-message')
+      .textContent()
+      .catch(() => undefined)
     throw new Error(
       `identity registration did not reach workspace${registrationError ? `: ${registrationError}` : ''}`
     )
