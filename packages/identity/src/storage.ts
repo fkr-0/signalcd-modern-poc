@@ -6,11 +6,15 @@ import type {
   UserIdentity
 } from './types'
 
-const SCHEMA_VERSION = 1
-const IDENTITIES = 'identities'
-const KEYPAIRS = 'keypairs'
-const REMOTE_IDENTITIES = 'remote_identities'
-const SESSIONS = 'sessions'
+const SCHEMA_VERSION = 2
+const IDENTITIES = 'identities_v2'
+const KEYPAIRS = 'keypairs_v2'
+const REMOTE_IDENTITIES = 'remote_identities_v2'
+const SESSIONS = 'sessions_v2'
+const LEGACY_IDENTITIES = 'identities'
+const LEGACY_KEYPAIRS = 'keypairs'
+const LEGACY_REMOTE_IDENTITIES = 'remote_identities'
+const LEGACY_SESSIONS = 'sessions'
 
 interface StoredIdentityMetadata {
   readonly userId: string
@@ -131,64 +135,85 @@ export class IndexedDbIdentityStorage implements IdentityStorage {
     tx.objectStore(IDENTITIES).clear()
     tx.objectStore(KEYPAIRS).clear()
     tx.objectStore(SESSIONS).clear()
-    tx.objectStore(IDENTITIES).put({
-      userId: identity.userId,
-      phoneNumber: identity.phoneNumber,
-      displayName: identity.displayName,
-      createdAt: identity.createdAt
-    } satisfies StoredIdentityMetadata)
-    tx.objectStore(KEYPAIRS).put({
-      keyId: 'identity',
-      userId: identity.userId,
-      type: 'identity',
-      publicKey: identity.identityKeyPair.publicKey,
-      privateKey: identity.identityKeyPair.privateKey,
-      createdAt: identity.createdAt
-    } satisfies StoredKeyPair)
-    tx.objectStore(KEYPAIRS).put({
-      keyId: identity.signedPrekeyPair.keyId,
-      userId: identity.userId,
-      type: 'signed_pre',
-      publicKey: identity.signedPrekeyPair.publicKey,
-      privateKey: identity.signedPrekeyPair.privateKey,
-      createdAt: identity.signedPrekeyPair.createdAt
-    } satisfies StoredKeyPair)
-    for (const prekey of identity.retiredSignedPrekeys) {
-      tx.objectStore(KEYPAIRS).put({
-        keyId: prekey.keyId,
+    tx.objectStore(IDENTITIES).put(
+      {
         userId: identity.userId,
-        type: 'retired_signed_pre',
-        publicKey: prekey.publicKey,
-        privateKey: prekey.privateKey,
-        createdAt: prekey.createdAt
-      } satisfies StoredKeyPair)
+        phoneNumber: identity.phoneNumber,
+        displayName: identity.displayName,
+        createdAt: identity.createdAt
+      } satisfies StoredIdentityMetadata,
+      identity.userId
+    )
+    tx.objectStore(KEYPAIRS).put(
+      {
+        keyId: 'identity',
+        userId: identity.userId,
+        type: 'identity',
+        publicKey: identity.identityKeyPair.publicKey,
+        privateKey: identity.identityKeyPair.privateKey,
+        createdAt: identity.createdAt
+      } satisfies StoredKeyPair,
+      'identity'
+    )
+    tx.objectStore(KEYPAIRS).put(
+      {
+        keyId: identity.signedPrekeyPair.keyId,
+        userId: identity.userId,
+        type: 'signed_pre',
+        publicKey: identity.signedPrekeyPair.publicKey,
+        privateKey: identity.signedPrekeyPair.privateKey,
+        createdAt: identity.signedPrekeyPair.createdAt
+      } satisfies StoredKeyPair,
+      identity.signedPrekeyPair.keyId
+    )
+    for (const prekey of identity.retiredSignedPrekeys) {
+      tx.objectStore(KEYPAIRS).put(
+        {
+          keyId: prekey.keyId,
+          userId: identity.userId,
+          type: 'retired_signed_pre',
+          publicKey: prekey.publicKey,
+          privateKey: prekey.privateKey,
+          createdAt: prekey.createdAt
+        } satisfies StoredKeyPair,
+        prekey.keyId
+      )
     }
     if (identity.pendingSignedPrekey) {
-      tx.objectStore(KEYPAIRS).put({
-        keyId: identity.pendingSignedPrekey.keyId,
-        userId: identity.userId,
-        type: 'pending_signed_pre',
-        publicKey: identity.pendingSignedPrekey.publicKey,
-        privateKey: identity.pendingSignedPrekey.privateKey,
-        createdAt: identity.pendingSignedPrekey.createdAt
-      } satisfies StoredKeyPair)
+      tx.objectStore(KEYPAIRS).put(
+        {
+          keyId: identity.pendingSignedPrekey.keyId,
+          userId: identity.userId,
+          type: 'pending_signed_pre',
+          publicKey: identity.pendingSignedPrekey.publicKey,
+          privateKey: identity.pendingSignedPrekey.privateKey,
+          createdAt: identity.pendingSignedPrekey.createdAt
+        } satisfies StoredKeyPair,
+        identity.pendingSignedPrekey.keyId
+      )
     }
     for (const prekey of identity.oneTimePrekeys) {
-      tx.objectStore(KEYPAIRS).put({
-        keyId: prekey.keyId,
-        userId: identity.userId,
-        type: 'one_time_pre',
-        publicKey: prekey.publicKey,
-        privateKey: prekey.privateKey,
-        createdAt: prekey.createdAt,
-        published: prekey.publishedAt !== undefined,
-        ...(prekey.publishedAt === undefined ? {} : { publishedAt: prekey.publishedAt })
-      } satisfies StoredKeyPair)
+      tx.objectStore(KEYPAIRS).put(
+        {
+          keyId: prekey.keyId,
+          userId: identity.userId,
+          type: 'one_time_pre',
+          publicKey: prekey.publicKey,
+          privateKey: prekey.privateKey,
+          createdAt: prekey.createdAt,
+          published: prekey.publishedAt !== undefined,
+          ...(prekey.publishedAt === undefined ? {} : { publishedAt: prekey.publishedAt })
+        } satisfies StoredKeyPair,
+        prekey.keyId
+      )
     }
-    tx.objectStore(SESSIONS).put({
-      userId: identity.userId,
-      sessionToken: identity.sessionToken
-    } satisfies StoredSession)
+    tx.objectStore(SESSIONS).put(
+      {
+        userId: identity.userId,
+        sessionToken: identity.sessionToken
+      } satisfies StoredSession,
+      identity.userId
+    )
     await complete(tx)
   }
 
@@ -213,7 +238,7 @@ export class IndexedDbIdentityStorage implements IdentityStorage {
   async saveRemoteIdentity(identity: RemoteIdentity): Promise<void> {
     const db = await this.dbPromise
     const tx = db.transaction(REMOTE_IDENTITIES, 'readwrite')
-    tx.objectStore(REMOTE_IDENTITIES).put(identity)
+    tx.objectStore(REMOTE_IDENTITIES).put(identity, identity.userId)
     await complete(tx)
   }
 
@@ -250,18 +275,35 @@ function openDatabase(factory: IDBFactory, name: string): Promise<IDBDatabase> {
     const value = factory.open(name, SCHEMA_VERSION)
     value.onupgradeneeded = () => {
       const db = value.result
-      if (!db.objectStoreNames.contains(IDENTITIES))
-        db.createObjectStore(IDENTITIES, { keyPath: 'userId' })
-      if (!db.objectStoreNames.contains(KEYPAIRS))
-        db.createObjectStore(KEYPAIRS, { keyPath: 'keyId' })
-      if (!db.objectStoreNames.contains(REMOTE_IDENTITIES))
-        db.createObjectStore(REMOTE_IDENTITIES, { keyPath: 'userId' })
-      if (!db.objectStoreNames.contains(SESSIONS))
-        db.createObjectStore(SESSIONS, { keyPath: 'userId' })
+      const tx = value.transaction
+      if (!tx) throw new Error('identity IndexedDB upgrade transaction is unavailable')
+      migrateToOutOfLineStore(db, tx, LEGACY_IDENTITIES, IDENTITIES)
+      migrateToOutOfLineStore(db, tx, LEGACY_KEYPAIRS, KEYPAIRS)
+      migrateToOutOfLineStore(db, tx, LEGACY_REMOTE_IDENTITIES, REMOTE_IDENTITIES)
+      migrateToOutOfLineStore(db, tx, LEGACY_SESSIONS, SESSIONS)
     }
     value.onsuccess = () => resolve(value.result)
     value.onerror = () => reject(value.error ?? new Error('identity IndexedDB open failed'))
   })
+}
+
+function migrateToOutOfLineStore(
+  db: IDBDatabase,
+  tx: IDBTransaction,
+  legacyName: string,
+  nextName: string
+): void {
+  if (db.objectStoreNames.contains(nextName)) return
+  const next = db.createObjectStore(nextName)
+  if (!db.objectStoreNames.contains(legacyName)) return
+
+  const cursorRequest = tx.objectStore(legacyName).openCursor()
+  cursorRequest.onsuccess = () => {
+    const cursor = cursorRequest.result
+    if (!cursor) return
+    next.put(cursor.value, cursor.primaryKey)
+    cursor.continue()
+  }
 }
 
 function readAll<T>(db: IDBDatabase, storeName: string): Promise<T[]> {
