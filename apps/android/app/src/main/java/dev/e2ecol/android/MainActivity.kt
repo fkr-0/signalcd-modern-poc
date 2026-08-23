@@ -77,7 +77,7 @@ private fun EditorApp(
             TopAppBar(
                 title = {
                     Column {
-                        Text("e2e-col")
+                        Text("SignalCD Modern PoC")
                         Text("Android compatibility scaffold", style = MaterialTheme.typography.labelSmall)
                     }
                 },

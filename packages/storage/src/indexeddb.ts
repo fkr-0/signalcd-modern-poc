@@ -2,14 +2,19 @@ import type { DocumentAccessState } from '@e2e-col/protocol'
 import {
   type CheckpointPolicy,
   cloneAccessState,
+  cloneAuthorizationState,
   cloneDocument,
   cloneOutbound,
+  type DocumentMetadataUpdate,
   type DurableCollaborativeStorage,
   normalizeSeenMessageTtlMs,
   type OutboundRecord,
   type SeenMessage,
   type SeenMessageRetentionOptions,
-  type StoredDocument
+  type StoredAuthorizationState,
+  type StoredDocument,
+  withDocumentMetadataUpdate,
+  withPreservedDocumentMetadata
 } from './storage'
 
 const SCHEMA_VERSION = 3
@@ -22,6 +27,7 @@ const SEEN_BY_TIME = 'by_seen_at'
 interface StoredAccessControl {
   readonly documentId: string
   readonly state: DocumentAccessState
+  readonly authorization?: StoredAuthorizationState
 }
 
 interface StoredSeenMessage extends SeenMessage {
@@ -58,6 +64,29 @@ export class IndexedDbCollaborativeStorage implements DurableCollaborativeStorag
     const tx = db.transaction(DOCUMENTS, 'readwrite')
     tx.objectStore(DOCUMENTS).put(cloneDocument(document))
     await complete(tx)
+  }
+
+  async updateDocumentMetadata(
+    documentId: string,
+    update: DocumentMetadataUpdate,
+    updatedAt: number
+  ): Promise<StoredDocument> {
+    const db = await this.dbPromise
+    const tx = db.transaction(DOCUMENTS, 'readwrite')
+    const done = complete(tx)
+    try {
+      const store = tx.objectStore(DOCUMENTS)
+      const current = await request<StoredDocument | undefined>(store.get(documentId))
+      if (!current) throw new Error(`document ${documentId} does not exist`)
+      const updated = withDocumentMetadataUpdate(current, update, updatedAt)
+      store.put(cloneDocument(updated))
+      await done
+      return cloneDocument(updated)
+    } catch (error) {
+      abortTransaction(tx)
+      await done.catch(() => undefined)
+      throw error
+    }
   }
 
   async deleteDocument(documentId: string): Promise<void> {
@@ -106,10 +135,26 @@ export class IndexedDbCollaborativeStorage implements DurableCollaborativeStorag
     return value ? cloneAccessState(value.state) : undefined
   }
 
+  async loadAuthorizationState(documentId: string): Promise<StoredAuthorizationState | undefined> {
+    const value = await request<StoredAccessControl | undefined>(
+      (await this.dbPromise).transaction(ACCESS_CONTROL).objectStore(ACCESS_CONTROL).get(documentId)
+    )
+    return value?.authorization ? cloneAuthorizationState(value.authorization) : undefined
+  }
+
   async saveAccessControl(documentId: string, state: DocumentAccessState): Promise<void> {
     const db = await this.dbPromise
+    const existing = await request<StoredAccessControl | undefined>(
+      db.transaction(ACCESS_CONTROL).objectStore(ACCESS_CONTROL).get(documentId)
+    )
     const tx = db.transaction(ACCESS_CONTROL, 'readwrite')
-    tx.objectStore(ACCESS_CONTROL).put({ documentId, state: cloneAccessState(state) })
+    tx.objectStore(ACCESS_CONTROL).put({
+      documentId,
+      state: cloneAccessState(state),
+      ...(existing?.authorization === undefined
+        ? {}
+        : { authorization: cloneAuthorizationState(existing.authorization) })
+    })
     await complete(tx)
   }
 
@@ -121,7 +166,11 @@ export class IndexedDbCollaborativeStorage implements DurableCollaborativeStorag
     const tx = db.transaction([DOCUMENTS, OUTBOUND], 'readwrite')
     const done = complete(tx)
     try {
-      tx.objectStore(DOCUMENTS).put(cloneDocument(input.document))
+      const documents = tx.objectStore(DOCUMENTS)
+      const current = await request<StoredDocument | undefined>(
+        documents.get(input.document.documentId)
+      )
+      documents.put(withPreservedDocumentMetadata(current, input.document))
       const outbound = tx.objectStore(OUTBOUND)
       for (const record of input.outbound) outbound.put(cloneOutbound(record))
     } catch (error) {
@@ -140,7 +189,11 @@ export class IndexedDbCollaborativeStorage implements DurableCollaborativeStorag
     const tx = db.transaction([DOCUMENTS, SEEN], 'readwrite')
     const done = complete(tx)
     try {
-      tx.objectStore(DOCUMENTS).put(cloneDocument(input.document))
+      const documents = tx.objectStore(DOCUMENTS)
+      const current = await request<StoredDocument | undefined>(
+        documents.get(input.document.documentId)
+      )
+      documents.put(withPreservedDocumentMetadata(current, input.document))
       const seen = tx.objectStore(SEEN)
       for (const value of input.seen) {
         const stored: StoredSeenMessage = {
@@ -160,16 +213,28 @@ export class IndexedDbCollaborativeStorage implements DurableCollaborativeStorag
   async commitAccessChange(input: {
     documentId: string
     access: DocumentAccessState
+    authorization?: StoredAuthorizationState
     outbound: readonly OutboundRecord[]
     seen?: readonly SeenMessage[]
   }): Promise<void> {
     const db = await this.dbPromise
+    const existing =
+      input.authorization === undefined
+        ? await request<StoredAccessControl | undefined>(
+            db.transaction(ACCESS_CONTROL).objectStore(ACCESS_CONTROL).get(input.documentId)
+          )
+        : undefined
     const tx = db.transaction([ACCESS_CONTROL, OUTBOUND, SEEN], 'readwrite')
     const done = complete(tx)
     try {
       tx.objectStore(ACCESS_CONTROL).put({
         documentId: input.documentId,
-        state: cloneAccessState(input.access)
+        state: cloneAccessState(input.access),
+        ...(input.authorization !== undefined
+          ? { authorization: cloneAuthorizationState(input.authorization) }
+          : existing?.authorization === undefined
+            ? {}
+            : { authorization: cloneAuthorizationState(existing.authorization) })
       })
       const outbound = tx.objectStore(OUTBOUND)
       for (const record of input.outbound) outbound.put(cloneOutbound(record))

@@ -13,6 +13,94 @@ export interface CollaborationMember {
   readonly joinedAt: number
 }
 
+function sha256Commitment(value: unknown, name: string): string {
+  if (typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value))
+    throw new GroupApiError(400, `${name} must be a lowercase SHA-256 hex commitment`)
+  return value
+}
+
+function authorizationEvidenceView(store: AuthorizationEvidenceStore): AuthorizationEvidenceView {
+  return {
+    version: 1,
+    expected_root: store.expectedRoot ?? null,
+    expected_head: store.expectedHead ?? null,
+    roots: [...store.roots].sort(),
+    controls: [...store.controls.values()].sort((left, right) =>
+      left.message_id.localeCompare(right.message_id)
+    ),
+    resolutions: [...store.resolutions.values()].sort((left, right) =>
+      left.message_id.localeCompare(right.message_id)
+    )
+  }
+}
+
+function controlEvidence(value: unknown): AuthorizationControlEvidenceRecord {
+  if (!record(value)) throw new GroupApiError(400, 'control evidence must be an object')
+  const kind = value.kind
+  if (kind !== 'membership' && kind !== 'archive' && kind !== 'delete')
+    throw new GroupApiError(400, 'control evidence kind is unsupported')
+  return { ...authorizationEvidence(value, 'control'), kind }
+}
+
+function authorizationEvidence(value: unknown, name: string): AuthorizationEvidenceRecord {
+  if (!record(value)) throw new GroupApiError(400, `${name} evidence must be an object`)
+  const senderId = text(value.sender_id, `${name}.sender_id`, 512)
+  const messageId = text(value.message_id, `${name}.message_id`, 512)
+  const payloadBase64 = encoded(value.payload_base64, `${name}.payload_base64`)
+  const receivedAt = value.received_at
+  if (!Number.isSafeInteger(receivedAt) || (receivedAt as number) < 0)
+    throw new GroupApiError(400, `${name}.received_at must be a non-negative safe integer`)
+  return {
+    sender_id: senderId,
+    message_id: messageId,
+    payload_base64: payloadBase64,
+    received_at: receivedAt as number
+  }
+}
+
+function sameAuthorizationEvidence(
+  left: AuthorizationEvidenceRecord,
+  right: AuthorizationEvidenceRecord
+): boolean {
+  // received_at is local observation metadata, not cryptographic evidence. Two
+  // replicas may publish the same signed record after observing it at different
+  // times, so collisions are defined only by immutable sender/message/payload.
+  return (
+    left.sender_id === right.sender_id &&
+    left.message_id === right.message_id &&
+    left.payload_base64 === right.payload_base64
+  )
+}
+
+function sameControlEvidence(
+  left: AuthorizationControlEvidenceRecord,
+  right: AuthorizationControlEvidenceRecord
+): boolean {
+  return left.kind === right.kind && sameAuthorizationEvidence(left, right)
+}
+
+function array(value: unknown, name: string): readonly unknown[] {
+  if (!Array.isArray(value) || value.length > 10_000)
+    throw new GroupApiError(400, `${name} must be a bounded array`)
+  return value
+}
+
+function encoded(value: unknown, name: string): string {
+  const result = text(value, name, 1_000_000)
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(result)) throw new GroupApiError(400, `${name} must be base64`)
+  return result
+}
+
+function text(value: unknown, name: string, max: number): string {
+  if (typeof value !== 'string' || value.length < 1 || value.length > max)
+    throw new GroupApiError(400, `${name} must be a non-empty bounded string`)
+  return value
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 interface CollaborationGroup {
   readonly groupId: string
   readonly documentId: string
@@ -20,6 +108,35 @@ interface CollaborationGroup {
   readonly createdAt: number
   name: string
   readonly members: Map<string, CollaborationMember>
+  readonly authorizationEvidence: AuthorizationEvidenceStore
+}
+
+export interface AuthorizationEvidenceRecord {
+  readonly sender_id: string
+  readonly message_id: string
+  readonly payload_base64: string
+  readonly received_at: number
+}
+
+export interface AuthorizationControlEvidenceRecord extends AuthorizationEvidenceRecord {
+  readonly kind: 'membership' | 'archive' | 'delete'
+}
+
+export interface AuthorizationEvidenceView {
+  readonly version: 1
+  readonly expected_root: string | null
+  readonly expected_head: string | null
+  readonly roots: readonly string[]
+  readonly controls: readonly AuthorizationControlEvidenceRecord[]
+  readonly resolutions: readonly AuthorizationEvidenceRecord[]
+}
+
+interface AuthorizationEvidenceStore {
+  expectedRoot?: string
+  expectedHead?: string
+  readonly roots: Set<string>
+  readonly controls: Map<string, AuthorizationControlEvidenceRecord>
+  readonly resolutions: Map<string, AuthorizationEvidenceRecord>
 }
 
 export interface CollaborationGroupView {
@@ -75,7 +192,8 @@ export class CollaborationGroupRegistry {
       createdBy: caller.userId,
       createdAt,
       name: optionalName(input.name) ?? `Document ${documentId.slice(0, 8)}`,
-      members: new Map()
+      members: new Map(),
+      authorizationEvidence: { roots: new Set(), controls: new Map(), resolutions: new Map() }
     }
     group.members.set(caller.phoneNumber, member(caller, 'admin', createdAt))
     this.groups.set(groupId, group)
@@ -93,6 +211,64 @@ export class CollaborationGroupRegistry {
     const group = this.requireGroup(uuid(groupId, 'group_id'))
     this.requireMember(group, caller)
     return view(group)
+  }
+
+  authorizationEvidence(groupId: string, caller: AuthenticatedIdentity): AuthorizationEvidenceView {
+    const group = this.requireGroup(uuid(groupId, 'group_id'))
+    this.requireMember(group, caller)
+    return authorizationEvidenceView(group.authorizationEvidence)
+  }
+
+  publishAuthorizationEvidence(
+    groupId: string,
+    caller: AuthenticatedIdentity,
+    input: Record<string, unknown>
+  ): AuthorizationEvidenceView {
+    const group = this.requireGroup(uuid(groupId, 'group_id'))
+    this.requireMember(group, caller)
+    if (input.version !== 1)
+      throw new GroupApiError(400, 'authorization evidence version must be 1')
+    const rootCommitment = sha256Commitment(input.root_commitment, 'root_commitment')
+    const headCommitment = sha256Commitment(input.head_commitment, 'head_commitment')
+    const roots = array(input.roots, 'roots').map((value) => encoded(value, 'root'))
+    const controls = array(input.controls, 'controls').map(controlEvidence)
+    const resolutions = array(input.resolutions, 'resolutions').map((value) =>
+      authorizationEvidence(value, 'resolution')
+    )
+    if (
+      group.authorizationEvidence.expectedRoot !== undefined &&
+      group.authorizationEvidence.expectedRoot !== rootCommitment
+    )
+      throw new GroupApiError(409, 'authorization evidence root commitment conflicts with cache')
+    group.authorizationEvidence.expectedRoot = rootCommitment
+    group.authorizationEvidence.expectedHead = headCommitment
+    for (const root of roots) group.authorizationEvidence.roots.add(root)
+    for (const control of controls) {
+      const key = `${control.kind}:${control.message_id}`
+      const existing = group.authorizationEvidence.controls.get(key)
+      if (existing) {
+        if (!sameControlEvidence(existing, control))
+          throw new GroupApiError(
+            409,
+            `authorization control ${control.message_id} changed evidence`
+          )
+        continue
+      }
+      group.authorizationEvidence.controls.set(key, control)
+    }
+    for (const resolution of resolutions) {
+      const existing = group.authorizationEvidence.resolutions.get(resolution.message_id)
+      if (existing) {
+        if (!sameAuthorizationEvidence(existing, resolution))
+          throw new GroupApiError(
+            409,
+            `authorization resolution ${resolution.message_id} changed evidence`
+          )
+        continue
+      }
+      group.authorizationEvidence.resolutions.set(resolution.message_id, resolution)
+    }
+    return authorizationEvidenceView(group.authorizationEvidence)
   }
 
   addMember(

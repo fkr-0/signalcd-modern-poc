@@ -1,5 +1,8 @@
 # e2e-col 0.5.0 — developer guide
 
+> **Archived forward-looking draft.** This document was prepared for a proposed 0.5.0 documentation target before the current 0.0.3 implementation state. It is preserved as design/history, not as the authoritative current release guide. Start at [`../index.md`](../index.md) and the generated [`/api/`](/api/) reference instead.
+
+
 > Documentation target: **0.5.0**. The checkout used to prepare this guide still reports package
 > version `0.0.1`; version bumping is intentionally outside this documentation suite.
 >

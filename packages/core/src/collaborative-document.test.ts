@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { CollaborativeDocument, type DocumentChange } from './collaborative-document'
 
 function deliver(target: CollaborativeDocument, changes: DocumentChange[]): void {
@@ -28,6 +28,30 @@ describe('CollaborativeDocument', () => {
     deliver(b, changes)
 
     expect(b.getText()).toBe('hello peer')
+  })
+
+  it('keeps the canonical empty history stable across independent module initialization times', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-08-21T10:00:00Z'))
+      vi.resetModules()
+      const FirstDocument = (await import('./collaborative-document')).CollaborativeDocument
+      const first = new FirstDocument().save()
+
+      vi.setSystemTime(new Date('2026-08-21T10:05:00Z'))
+      vi.resetModules()
+      const SecondDocument = (await import('./collaborative-document')).CollaborativeDocument
+      const second = new SecondDocument().save()
+
+      expect(second).toEqual(first)
+      const source = new FirstDocument(first)
+      const target = new SecondDocument(second)
+      expect(() => target.applyChanges(source.editText('cross-context bootstrap'))).not.toThrow()
+      expect(target.getText()).toBe('cross-context bootstrap')
+    } finally {
+      vi.useRealTimers()
+      vi.resetModules()
+    }
   })
 
   it('converges after concurrent inserts delivered in opposite orders', () => {

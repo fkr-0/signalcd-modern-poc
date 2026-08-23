@@ -243,6 +243,23 @@ export class ToySignalCliServer {
         )
         return
       }
+      if (
+        request.method === 'POST' &&
+        url.pathname === MOCK_IDENTITY_ENDPOINTS.rotateSignedPrekey
+      ) {
+        const value = await readJson(request)
+        const record = isRecord(value) ? value : {}
+        json(
+          response,
+          200,
+          await this.identities.rotateSignedPrekey(
+            request.headers.authorization,
+            record.signed_prekey_public,
+            record.signed_prekey_signature
+          )
+        )
+        return
+      }
       if (request.method === 'GET' && url.pathname.startsWith(MOCK_IDENTITY_ENDPOINTS.keyPrefix)) {
         const phoneNumber = decodeURIComponent(
           url.pathname.slice(MOCK_IDENTITY_ENDPOINTS.keyPrefix.length)
@@ -268,6 +285,23 @@ export class ToySignalCliServer {
         const caller = this.identities.authenticate(request.headers.authorization)
         if (request.method === 'GET' && groupRoute.kind === 'group') {
           json(response, 200, this.groups.get(groupRoute.groupId, caller))
+          return
+        }
+        if (request.method === 'GET' && groupRoute.kind === 'authorization') {
+          json(response, 200, this.groups.authorizationEvidence(groupRoute.groupId, caller))
+          return
+        }
+        if (request.method === 'POST' && groupRoute.kind === 'authorization') {
+          const value = await readJson(request)
+          json(
+            response,
+            200,
+            this.groups.publishAuthorizationEvidence(
+              groupRoute.groupId,
+              caller,
+              isRecord(value) ? value : {}
+            )
+          )
           return
         }
         if (request.method === 'POST' && groupRoute.kind === 'members') {
@@ -490,6 +524,7 @@ function parseGroupRoute(
 ):
   | { kind: 'group'; groupId: string }
   | { kind: 'members'; groupId: string }
+  | { kind: 'authorization'; groupId: string }
   | { kind: 'member'; groupId: string; phoneNumber: string }
   | undefined {
   const prefix = `${MOCK_GROUP_ENDPOINTS.groups}/`
@@ -498,6 +533,8 @@ function parseGroupRoute(
   if (parts.length === 1 && parts[0]) return { kind: 'group', groupId: parts[0] }
   if (parts.length === 2 && parts[0] && parts[1] === 'members')
     return { kind: 'members', groupId: parts[0] }
+  if (parts.length === 2 && parts[0] && parts[1] === 'authorization')
+    return { kind: 'authorization', groupId: parts[0] }
   if (parts.length === 3 && parts[0] && parts[1] === 'members' && parts[2])
     return { kind: 'member', groupId: parts[0], phoneNumber: parts[2] }
   return undefined

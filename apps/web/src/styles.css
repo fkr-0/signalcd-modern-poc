@@ -16,6 +16,34 @@
   --shadow: 0 20px 65px rgb(34 53 43 / 8%);
 }
 
+.metadata-note {
+  margin: 18px 0 0;
+  font-size: 12px;
+}
+
+.rename-dialog form {
+  margin-bottom: 0;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 8px;
+}
+
+.document-id {
+  display: block;
+  max-width: min(46vw, 520px);
+  overflow: hidden;
+  margin-top: 4px;
+  color: var(--muted);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -454,13 +482,24 @@ textarea:disabled {
   overflow: auto;
 }
 
+.document-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  border-bottom: 1px solid var(--line);
+}
+
+.document-entry.active {
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+}
+
 .document-row {
   display: grid;
   gap: 4px;
   min-height: 0;
   margin: 0;
   padding: 14px 18px;
-  border-bottom: 1px solid var(--line);
   border-radius: 0;
   background: transparent;
   color: var(--ink);
@@ -469,10 +508,19 @@ textarea:disabled {
 }
 
 .document-row:hover:not(:disabled),
-.document-row.active {
+.document-entry.active .document-row {
   transform: none;
   background: var(--accent-soft);
   color: var(--accent-dark);
+}
+
+.document-rename {
+  align-self: center;
+  min-height: 32px;
+  margin: 0 10px 0 0;
+  padding: 0 9px;
+  border-radius: 8px;
+  font-size: 11px;
 }
 
 .document-row small,
@@ -551,6 +599,37 @@ textarea:disabled {
 
 .sync-controls > span:first-child {
   margin-right: auto;
+}
+
+.sync-state {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 9px 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sync-state strong {
+  flex: 0 0 auto;
+  color: var(--text);
+}
+
+.sync-state-offline,
+.sync-state-recovering {
+  background: #fff8e8;
+}
+
+.sync-state-conflict,
+.sync-state-error {
+  background: #fff0f0;
+}
+
+.sync-state-conflict strong,
+.sync-state-error strong {
+  color: #a12a2a;
 }
 
 .sync-mode-toggle {

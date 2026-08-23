@@ -1,4 +1,10 @@
-import type { IdentityStorage, OneTimePrekey, RemoteIdentity, UserIdentity } from './types'
+import type {
+  IdentityStorage,
+  OneTimePrekey,
+  RemoteIdentity,
+  SignedPrekey,
+  UserIdentity
+} from './types'
 
 const SCHEMA_VERSION = 1
 const IDENTITIES = 'identities'
@@ -16,10 +22,17 @@ interface StoredIdentityMetadata {
 interface StoredKeyPair {
   readonly keyId: string
   readonly userId: string
-  readonly type: 'identity' | 'signed_pre' | 'one_time_pre'
+  readonly type:
+    | 'identity'
+    | 'signed_pre'
+    | 'retired_signed_pre'
+    | 'pending_signed_pre'
+    | 'one_time_pre'
   readonly publicKey: CryptoKey
   readonly privateKey: CryptoKey
   readonly createdAt: number
+  readonly published?: boolean
+  readonly publishedAt?: number
 }
 
 interface StoredSession {
@@ -82,6 +95,11 @@ export class IndexedDbIdentityStorage implements IdentityStorage {
     )
     const identity = keypairs.find((record) => record.type === 'identity')
     const signedPrekey = keypairs.find((record) => record.type === 'signed_pre')
+    const retiredSignedPrekeys = keypairs.filter(
+      (record): record is StoredKeyPair & { type: 'retired_signed_pre' } =>
+        record.type === 'retired_signed_pre'
+    )
+    const pendingSignedPrekey = keypairs.find((record) => record.type === 'pending_signed_pre')
     const oneTimePrekeys = keypairs.filter(
       (record): record is StoredKeyPair & { type: 'one_time_pre' } => record.type === 'one_time_pre'
     )
@@ -96,10 +114,11 @@ export class IndexedDbIdentityStorage implements IdentityStorage {
       phoneNumber: local.phoneNumber,
       displayName: local.displayName,
       identityKeyPair: { publicKey: identity.publicKey, privateKey: identity.privateKey },
-      signedPrekeyPair: {
-        publicKey: signedPrekey.publicKey,
-        privateKey: signedPrekey.privateKey
-      },
+      signedPrekeyPair: toSignedPrekey(signedPrekey),
+      retiredSignedPrekeys: retiredSignedPrekeys.map(toSignedPrekey),
+      ...(pendingSignedPrekey === undefined
+        ? {}
+        : { pendingSignedPrekey: toSignedPrekey(pendingSignedPrekey) }),
       oneTimePrekeys: oneTimePrekeys.map(toOneTimePrekey),
       sessionToken: session.sessionToken,
       createdAt: local.createdAt
@@ -127,13 +146,33 @@ export class IndexedDbIdentityStorage implements IdentityStorage {
       createdAt: identity.createdAt
     } satisfies StoredKeyPair)
     tx.objectStore(KEYPAIRS).put({
-      keyId: 'signed-prekey',
+      keyId: identity.signedPrekeyPair.keyId,
       userId: identity.userId,
       type: 'signed_pre',
       publicKey: identity.signedPrekeyPair.publicKey,
       privateKey: identity.signedPrekeyPair.privateKey,
-      createdAt: identity.createdAt
+      createdAt: identity.signedPrekeyPair.createdAt
     } satisfies StoredKeyPair)
+    for (const prekey of identity.retiredSignedPrekeys) {
+      tx.objectStore(KEYPAIRS).put({
+        keyId: prekey.keyId,
+        userId: identity.userId,
+        type: 'retired_signed_pre',
+        publicKey: prekey.publicKey,
+        privateKey: prekey.privateKey,
+        createdAt: prekey.createdAt
+      } satisfies StoredKeyPair)
+    }
+    if (identity.pendingSignedPrekey) {
+      tx.objectStore(KEYPAIRS).put({
+        keyId: identity.pendingSignedPrekey.keyId,
+        userId: identity.userId,
+        type: 'pending_signed_pre',
+        publicKey: identity.pendingSignedPrekey.publicKey,
+        privateKey: identity.pendingSignedPrekey.privateKey,
+        createdAt: identity.pendingSignedPrekey.createdAt
+      } satisfies StoredKeyPair)
+    }
     for (const prekey of identity.oneTimePrekeys) {
       tx.objectStore(KEYPAIRS).put({
         keyId: prekey.keyId,
@@ -141,7 +180,9 @@ export class IndexedDbIdentityStorage implements IdentityStorage {
         type: 'one_time_pre',
         publicKey: prekey.publicKey,
         privateKey: prekey.privateKey,
-        createdAt: prekey.createdAt
+        createdAt: prekey.createdAt,
+        published: prekey.publishedAt !== undefined,
+        ...(prekey.publishedAt === undefined ? {} : { publishedAt: prekey.publishedAt })
       } satisfies StoredKeyPair)
     }
     tx.objectStore(SESSIONS).put({
@@ -182,6 +223,20 @@ export class IndexedDbIdentityStorage implements IdentityStorage {
 }
 
 function toOneTimePrekey(record: StoredKeyPair): OneTimePrekey {
+  // Pre-rotation schema records had no publication marker; every such record
+  // was created by successful registration and was therefore already public.
+  const publishedAt =
+    record.published === false ? undefined : (record.publishedAt ?? record.createdAt)
+  return {
+    keyId: record.keyId,
+    publicKey: record.publicKey,
+    privateKey: record.privateKey,
+    createdAt: record.createdAt,
+    ...(publishedAt === undefined ? {} : { publishedAt })
+  }
+}
+
+function toSignedPrekey(record: StoredKeyPair): SignedPrekey {
   return {
     keyId: record.keyId,
     publicKey: record.publicKey,

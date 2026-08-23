@@ -23,23 +23,29 @@ class SidecarEndpoint private constructor(
     companion object {
         fun create(rawUrl: String, allowRemote: Boolean = false): SidecarEndpoint {
             val parsed = URI(rawUrl)
-            require(parsed.scheme in setOf("ws", "wss", "http", "https")) {
-                "sidecar URL must use ws(s) or http(s)"
+            val scheme = parsed.scheme?.lowercase()
+            require(scheme in setOf("ws", "wss")) {
+                "sidecar URL must use ws or wss"
             }
+            require(parsed.rawUserInfo == null) { "sidecar URL must not contain credentials" }
+            require(parsed.fragment == null) { "sidecar URL must not contain a fragment" }
             val host = parsed.host ?: throw IllegalArgumentException("sidecar URL requires a host")
-            if (!allowRemote) {
-                require(host == "localhost" || host == "127.0.0.1" || host == "::1") {
+            val canonicalHost = host.removePrefix("[").removeSuffix("]").lowercase()
+            val loopback = canonicalHost == "localhost" || canonicalHost == "127.0.0.1" || canonicalHost == "::1"
+            if (!loopback) {
+                require(allowRemote) {
                     "sidecar URL must be loopback unless allowRemote is explicitly enabled"
                 }
+                require(scheme == "wss") { "remote sidecar URLs must use wss" }
             }
-            val normalizedScheme = when (parsed.scheme) {
+            val normalizedScheme = when (scheme) {
                 "ws" -> "http"
                 "wss" -> "https"
-                else -> parsed.scheme
+                else -> error("validated sidecar scheme became unavailable")
             }
             val normalized = URI(
                 normalizedScheme,
-                parsed.userInfo,
+                null,
                 host,
                 parsed.port,
                 parsed.path.ifEmpty { "/" },

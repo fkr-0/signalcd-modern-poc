@@ -1,4 +1,5 @@
 export * from './access-control'
+export * from './authorization-proof'
 export * from './chunking'
 export * from './codec'
 export * from './debug-observer'

@@ -1,121 +1,96 @@
-# e2e-col
+# SignalCD Modern PoC
 
-Modern exploration of the SignalCD idea from SPRING/EPFL's
-`signal-collaborative-documents` research prototype.
+**An independent modern proof-of-concept implementation of SignalCD, the system described in _End-to-End Encrypted Collaborative Documents_ (USENIX Security 2026).**
 
-The upstream research code is pinned under `upstream/` as a Git submodule at the
-reviewed commit, leaving it unchanged and reproducible. This repository adds a
-browser-oriented architecture and implementation trunk around the paper's
-generic construction: strongly convergent client-side reconciliation plus an
-end-to-end encrypted asynchronous broadcast channel.
+This repository is a browser-first reimplementation and extension of the SignalCD research construction. It preserves the paper's core idea—strongly convergent client-side reconciliation over an end-to-end encrypted asynchronous broadcast channel—while adding a modern TypeScript client stack, durable local-first storage, authenticated collaboration state, a `signal-cli` sidecar, and an Android compatibility scaffold.
 
-See:
+It is **not** an official Signal product and is not affiliated with Signal Messenger LLC, the Signal Foundation, EPFL, the Max Planck institutes, or the paper authors.
 
-- `docs/POC-REVIEW.md`
-- `docs/ARCHITECTURE.md`
-- `docs/PROJECT-PLAN.md`
-- `docs/ROADMAP-DESIGN-SPEC.md`
-- `docs/TARGET-API-SPEC.md` — normative target API for app/client/storage/sidecar design
-- `docs/API-IMPLEMENTATION-STATUS.md` — exact implemented/partial/missing API matrix
-- `docs/REPORT.md`
-- `docs/LIVE-TUTORIAL.md` — hands-on local run + real Signal go-live path
+## Project identity
 
-## Proposed trunk stack
+| Item | Value |
+| --- | --- |
+| Project name | **SignalCD Modern PoC** |
+| Repository | `fkr-0/signalcd-modern-poc` |
+| Documentation | <https://signalcd-poc.fkr.dev/> |
+| Current release line | `0.0.3` technical preview |
+| Research system | **SignalCD** |
+| Paper | Christian Knabenhans, Zayd Maradni, Carmela Troncoso, _End-to-End Encrypted Collaborative Documents_, USENIX Security 2026 |
+| Upstream research prototype | <https://github.com/spring-epfl/signal-collaborative-documents> |
 
-- Vite + React + TypeScript
-- `@automerge/automerge` for strong convergence
-- IndexedDB persistence baseline with durable-semantics hardening still in progress
-- Node.js/TypeScript localhost sidecar for `signal-cli` (initial bridge implemented)
-- WebSocket browser ↔ sidecar transport
-- protocol envelopes designed for duplicate/reordered delivery
+The original internal namespace remains visible in compatibility-sensitive identifiers such as `@e2e-col/*`, `E2E_COL_*`, `e2e-col:v1:`, Android `dev.e2ecol.*`, and existing local-storage/deep-link identifiers. Those names are retained deliberately in the `0.x` line to avoid silently changing protocol, persistence, import, and deep-link contracts during a documentation/release rename.
 
-The browser must never own Signal device credentials. Signal is the initial
-E2EE asynchronous-broadcast backend, not a dependency of the editor core.
+## What works today
 
-## Motivation and solution
+| Surface | State |
+| --- | --- |
+| Browser local-first collaborative text | Implemented and extensively tested |
+| Automerge convergence under delay/reorder/duplication/offline delivery | Implemented |
+| Durable IndexedDB state + outbound replay | Implemented |
+| Browser-owned Ed25519/X25519 application identity + recipient-bound E2EE | Implemented in the current test/toy environment |
+| Authenticated R6 collaboration authorization/fork handling | Implemented in the current trust model |
+| `signal-cli` sidecar adapter | Implemented and contract-tested |
+| Real two-account Signal collaboration | **Still requires live external qualification** |
+| Android sidecar proxy | Implemented |
+| Android editing the shared encrypted document | **Not yet wired**; native E2EE/Keystore parity remains a gate |
+| Production identity provisioning / authenticated first-contact deployment | Incomplete |
 
-Collaborative editors usually rely on a central service that can see and merge
-plaintext document state. `e2e-col` takes a different approach: clients own the
-document state, Automerge provides strong convergence, and an encrypted
-asynchronous broadcast channel moves opaque updates between participants.
+The detailed state table, architecture diagrams, security boundaries, artifact links, and roadmap are on the [documentation landing page](docs/index.md).
 
-The SPRING/EPFL SignalCD prototype demonstrates this concept using Automerge and
-Signal. This repository keeps that construction but modernizes the software
-architecture. The editor is a Vite/React application, the CRDT core is
-transport-agnostic, and Signal is isolated behind a local Node.js sidecar so
-device credentials never enter browser storage.
+**Help wanted:** the highest-value external contribution is a two-account run against current real `signal-cli`. Follow [`docs/SIGNALCLI-EXPERIMENT.md`](docs/SIGNALCLI-EXPERIMENT.md) and report only sanitized evidence.
 
-The first deployment target is a browser application plus a localhost companion
-daemon. The browser stores local-first state in IndexedDB, continues editing
-offline, and exchanges typed binary update envelopes through the sidecar. The
-sidecar maps those envelopes to Signal group messages and back again. Because
-the CRDT layer is designed to converge under delayed, duplicated, and reordered
-delivery, the helper process does not need to become a plaintext merge server.
+## Architecture at a glance
 
-For the full narrative covering motivation, concept, architecture, and
-deployment, see `docs/REPORT.md`. For the package-level roadmap and concurrent
-agent work split, see `docs/ROADMAP-DESIGN-SPEC.md`. Application projects should
-design against `docs/TARGET-API-SPEC.md`; its companion
-`docs/API-IMPLEMENTATION-STATUS.md` distinguishes the interfaces that exist now
-from target surfaces that still need implementation or secure design review.
+```mermaid
+flowchart LR
+  A[Browser / client replica] -->|Automerge + ProtocolEnvelope| B[Application E2EE]
+  B -->|opaque binary frames| C[Local sidecar]
+  C -->|JSON-RPC + SSE| D[signal-cli]
+  D -->|Signal group messages| E[Signal network]
+  E --> D2[peer signal-cli]
+  D2 --> C2[peer sidecar]
+  C2 --> B2[peer application E2EE]
+  B2 --> A2[peer replica]
+```
+
+The sidecar is a transport boundary, not a plaintext merge authority. Browser private application keys remain client-owned; Signal device credentials remain outside browser storage.
 
 ## Getting started
 
-The current repository already runs a local two-replica Automerge demo. If the
-research source is wanted locally, initialize the pinned submodule first; it is
-not required by the application build. Then install from the lockfile, verify
-the workspace, and start Vite:
-
 ```bash
-git submodule update --init --recursive
-npm ci
-npm run check
-npm run dev
+git clone --recurse-submodules https://github.com/fkr-0/signalcd-modern-poc.git
+cd signalcd-modern-poc
+pnpm install --frozen-lockfile
+pnpm run check
+pnpm dev
 ```
 
-Then open `http://localhost:5173/` and edit either replica. The other pane should
-converge immediately.
+For the real `signal-cli` bring-up path and its current external prerequisites, see [`docs/LIVE-TUTORIAL.md`](docs/LIVE-TUTORIAL.md). For Android, see [`docs/android-integration.md`](docs/android-integration.md).
 
-The default web demo is still a **local deterministic transport proof**, but it
-now exercises the shared core, protocol, storage, and transport packages through
-`BrowserReplicaSession`. Set `VITE_E2E_COL_SIDECAR_URL` to select the localhost
-`WebSocketTransport` companion mode instead. The main post-`0.0.1` gaps are
-extracting the reusable `@e2e-col/client` facade, strengthening storage to atomic
-checkpoint/recovery semantics, implementing authenticated document access/lifecycle
-semantics, and proving a real two-device Signal round trip.
+## Releases and artifacts
 
-For a complete step-by-step guide covering Node requirements, `signal-cli`
-installation/linking, group setup, JSON-RPC daemon checks, the sidecar contract
-and remaining hardening, two-machine smoke testing, deployment, and
-troubleshooting, see
-[`docs/LIVE-TUTORIAL.md`](docs/LIVE-TUTORIAL.md).
+GitHub Releases publishes the technical-preview artifacts produced by CI:
 
-## Useful commands
+- static browser build archive;
+- Android **debug** APK for the current compatibility scaffold;
+- sidecar/protocol source bundle for the companion transport boundary;
+- SHA-256 checksums.
 
-```bash
-npm run dev          # Vite browser demo
-npm run check        # typecheck + lint + format + unit/integration tests + build
-npm run test:e2e     # Playwright browser test
-npm run build        # production workspace builds
-```
+See **<https://github.com/fkr-0/signalcd-modern-poc/releases/latest>**.
 
-## Current implementation map
+## Research provenance
 
-```text
-e2e-col/
-├── apps/
-│   ├── web/             # Vite/React demo + BrowserReplicaSession precursor
-│   └── sidecar/         # hardened localhost WebSocket <-> signal-cli bridge
-├── packages/
-│   ├── core/            # Automerge document/session abstraction
-│   ├── protocol/        # versioned binary envelopes, validation, chunks, dedup
-│   ├── transport/       # fault simulation + browser WebSocket client
-│   ├── storage/         # memory + IndexedDB persistence baseline
-│   └── testing/         # network/convergence/wire scenarios
-├── docs/
-│   ├── TARGET-API-SPEC.md
-│   ├── API-IMPLEMENTATION-STATUS.md
-│   └── LIVE-TUTORIAL.md
-├── tests/e2e/           # Playwright browser checks
-└── upstream/            # preserved SPRING/EPFL research prototype
-```
+The generic E2EE-CD framework in the paper combines an end-to-end encrypted asynchronous broadcast primitive with a reconciliation mechanism that guarantees globally consistent document views. The authors instantiate that framework as **SignalCD** using Signal group messaging and provide an Automerge/Signal research prototype. This repository keeps that provenance explicit and preserves the reviewed upstream code as the `upstream/` submodule.
+
+Primary references:
+
+- USENIX Security 2026 paper page: <https://www.usenix.org/conference/usenixsecurity26/presentation/knabenhans>
+- SPRING/EPFL prototype: <https://github.com/spring-epfl/signal-collaborative-documents>
+- [`docs/POC-REVIEW.md`](docs/POC-REVIEW.md)
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/ROADMAP.md`](docs/ROADMAP.md)
+- [`docs/TARGET-API-SPEC.md`](docs/TARGET-API-SPEC.md)
+
+## License
+
+MIT. Research citations and third-party trademarks remain the property of their respective owners.

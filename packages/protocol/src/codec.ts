@@ -18,7 +18,8 @@ const KIND_TO_CODE: Readonly<Record<EnvelopeKind, number>> = {
   archive: 4,
   delete: 5,
   health: 6,
-  chunk: 7
+  chunk: 7,
+  'authorization-resolution': 8
 }
 
 const CODE_TO_KIND = new Map<number, EnvelopeKind>(

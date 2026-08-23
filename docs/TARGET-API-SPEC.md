@@ -3,7 +3,7 @@
 Status: **draft target contract**  
 API revision: **draft-1**  
 Protocol wire version: **1**  
-Status snapshot: **2026-08-19**
+Status snapshot: **2026-08-22**
 
 This document defines the API shape that applications should target while
 `e2e-col` evolves from the current local collaboration proof into a durable,
@@ -28,7 +28,7 @@ API surfaces are classified as:
 | `internal`   | Test/support behavior that applications should not depend on.                                                             |
 | `unresolved` | Architectural requirement is known, but the exact contract is intentionally not frozen yet.                               |
 
-The repository is still pre-1.0; the current release sweep is `0.0.1`.
+The repository is still pre-1.0; the current release sweep is `0.0.2`.
 This specification therefore describes the intended stable boundary rather than
 claiming semver stability that the packages do not yet have.
 
@@ -72,7 +72,7 @@ The target dependency direction is:
                                            │
                                            ▼
                                   ┌──────────────────┐
-                                  │ @e2e-col/client  │  TARGET, missing today
+                                  │ @e2e-col/client  │  implemented baseline
                                   │ app-facing SDK   │
                                   └───┬────┬────┬────┘
                                       │    │    │
@@ -261,7 +261,14 @@ The v1 logical envelope is:
 export const PROTOCOL_VERSION = 1 as const
 
 export type EnvelopeKind =
-  'automerge-change' | 'snapshot' | 'membership' | 'archive' | 'delete' | 'health' | 'chunk'
+  | 'automerge-change'
+  | 'snapshot'
+  | 'membership'
+  | 'archive'
+  | 'delete'
+  | 'health'
+  | 'chunk'
+  | 'authorization-resolution'
 
 export interface ChunkMetadata {
   readonly index: number
@@ -363,29 +370,60 @@ The envelope only defines framing. Payload semantics are owned by higher layers:
 | `membership`       | access-control layer           | authenticated membership state transition  |
 | `archive`          | access-control/lifecycle layer | authenticated archive transition           |
 | `delete`           | access-control/lifecycle layer | authenticated delete/tombstone transition  |
+| `authorization-resolution` | access-control layer | signed quorum reconciliation of a frozen authorization fork |
 | `health`           | client/sidecar integration     | non-secret diagnostics/control metadata    |
 | `chunk`            | protocol/sidecar               | fragment of one non-chunk logical envelope |
 
 ### 6.6 Control-payload codecs
 
-Stability: **unresolved**.
+Stability: **implemented review candidate; control payload v2 is intentionally
+incompatible with legacy control payload v1**.
 
-The v1 envelope already reserves control kinds, but the exact
-`membership`/`archive`/`delete` payload schemas are not frozen.
+The outer `ProtocolEnvelope` stays at version 1 and continues to reserve
+`membership`/`archive`/`delete`. Those kinds now contain an independently versioned
+control payload. The current codec emits control payload **v2** with these common
+authenticated fields before kind-specific data:
+
+```ts
+interface AuthorizationProof {
+  documentId: string
+  revision: number          // positive, exactly predecessor revision + 1
+  predecessor: Uint8Array   // 32-byte authorization commitment
+}
+```
+
+Membership/archive/delete signing preimages use separate v2 domain separators and
+cover the authorization proof plus all semantic action fields. A control commitment
+is SHA-256 over that canonical signing preimage. The signature itself is not part of
+the commitment.
 
 Applications MUST NOT invent independent ad-hoc wire formats for those kinds.
-The target protocol API is expected to add typed codecs such as:
+The current protocol API exposes typed codecs and signing helpers including:
 
 ```ts
 encodeMembershipPayload(value: MembershipPayload): Uint8Array
 decodeMembershipPayload(bytes: Uint8Array): MembershipPayload
+encodeArchivePayload(value: ArchivePayload): Uint8Array
+decodeArchivePayload(bytes: Uint8Array): ArchivePayload
+encodeDeletePayload(value: DeletePayload): Uint8Array
+decodeDeletePayload(bytes: Uint8Array): DeletePayload
 
-encodeLifecyclePayload(value: LifecyclePayload): Uint8Array
-decodeLifecyclePayload(bytes: Uint8Array): LifecyclePayload
+membershipPayloadSigningBytes(value): Uint8Array
+archivePayloadSigningBytes(value): Uint8Array
+deletePayloadSigningBytes(value): Uint8Array
+authorizationControlCommitment(signingBytes): Promise<Uint8Array>
 ```
 
-The authenticated proof representation remains part of the R6 access-control
-design and is intentionally not specified here without that review.
+Legacy control payload v1 is rejected during decode with an explicit
+not-replay-safe error. This is a deliberate fail-closed compatibility boundary:
+there is no safe way to infer a predecessor for an old signed control. Persisted
+revision-0 ACL state can migrate to the all-zero v2 genesis predecessor; persisted
+legacy state with prior control history is anchored to a deterministic semantic
+state commitment instead of pretending that history is reconstructable.
+
+`ProtocolEnvelope.sequence` MUST NOT be substituted for `revision` or
+`predecessor`. It remains optional, sender-session-local/resettable, and shared by
+CRDT, snapshot, and control frames.
 
 ## 7. `@e2e-col/transport`
 
@@ -550,6 +588,13 @@ export interface StoredDocument {
 export interface DocumentMetadata {
   readonly title?: string
   readonly archived?: boolean
+  /** Application-owned additive local metadata is preserved. */
+  readonly [key: string]: unknown
+}
+
+export interface DocumentMetadataUpdate {
+  /** null clears the local display title. */
+  readonly title: string | null
 }
 
 export interface OutboundRecord {
@@ -566,6 +611,11 @@ export interface OutboundRecord {
 export interface CollaborativeStorage {
   loadDocument(documentId: string): Promise<StoredDocument | undefined>
   saveDocument(document: StoredDocument): Promise<void>
+  updateDocumentMetadata(
+    documentId: string,
+    update: DocumentMetadataUpdate,
+    updatedAt: number
+  ): Promise<StoredDocument>
   deleteDocument(documentId: string): Promise<void>
   listDocuments(): Promise<readonly StoredDocument[]>
   enqueue(record: OutboundRecord): Promise<void>
@@ -576,8 +626,17 @@ export interface CollaborativeStorage {
 ```
 
 `MemoryCollaborativeStorage` and `IndexedDbCollaborativeStorage` implement this
-baseline now. `metadata` MUST contain only application-safe document metadata.
-Signal device keys/account state MUST never be stored here.
+baseline now. `metadata` MUST contain only application-safe, **device-local** document
+metadata. It is not CRDT/network state and MUST NOT be presented as automatically
+convergent across replicas. Signal device keys/account state MUST never be stored
+here.
+
+`updateDocumentMetadata()` is a metadata-only atomic write. A successful update MUST
+preserve document snapshot bytes and every unrelated metadata key and MUST NOT touch
+outbound, seen-message, access-control, or authorization stores. A failed transaction
+MUST leave the previous durable record intact. Content/snapshot transactions MUST in
+turn preserve the already-durable metadata lane, so stale session metadata cannot
+race a rename and overwrite it.
 
 ### 8.2 Target durable semantics
 
@@ -668,13 +727,12 @@ rather than silently resetting local data.
 
 ## 9. `@e2e-col/client`
 
-Stability: **target; package not implemented yet**.
+Stability: **implemented baseline; target refinements remain**.
 
-`apps/web/src/session.ts` now contains `BrowserReplicaSession`, a useful precursor
-that already composes core + protocol + storage + transport. It is deliberately
-not promoted as the cross-app API: the target package below extracts that
-orchestration behind framework-neutral view/status/access contracts and stronger
-durable semantics.
+`@e2e-col/client` provides the framework-neutral orchestration layer that composes
+core + protocol + storage + transport behind view/status/access contracts and
+durable replay/recovery semantics. The target sections below describe the
+implemented baseline plus additive refinements rather than a missing future package.
 
 This is the primary API that new applications SHOULD design against.
 
@@ -718,6 +776,13 @@ export interface CollaborativeClientOptions {
   readonly recovery?: RecoveryPolicy
 }
 
+export const MAX_DOCUMENT_TITLE_LENGTH = 200
+
+export interface UpdateDocumentMetadataOptions {
+  /** null or blank/whitespace-only text clears the local display title. */
+  readonly title: string | null
+}
+
 export interface DocumentSummary {
   readonly documentId: string
   readonly title?: string
@@ -731,9 +796,26 @@ export class CollaborativeClient {
   createDocument(options?: CreateDocumentOptions): Promise<DocumentSession>
   openDocument(documentId: string): Promise<DocumentSession>
   listDocuments(): Promise<readonly DocumentSummary[]>
+  updateDocumentMetadata(
+    documentId: string,
+    update: UpdateDocumentMetadataOptions
+  ): Promise<DocumentSummary>
   close(): Promise<void>
 }
 ```
+
+Display-title authority is local to the client/storage instance. `documentId` remains
+immutable identity. Title normalization trims surrounding whitespace, accepts one
+line only, and rejects normalized strings longer than 200 JavaScript string code
+units. `null` or a normalized empty string clears the title. Applications SHOULD
+render a stable UUID-derived fallback when `DocumentSummary.title` is absent.
+
+A metadata update MUST NOT emit CRDT, membership, lifecycle,
+authorization-resolution, or transport traffic. It MUST NOT alter group binding,
+authorization root/head/revision, participant ACL, archive/delete state, or document
+content. Because this is local presentation metadata, reader/archived/deleted access
+state does not grant or revoke the ability to change the local label; the operation
+MUST still leave those collaboration restrictions fully enforced.
 
 ### 9.2 `DocumentSession`
 
@@ -741,10 +823,19 @@ export class CollaborativeClient {
 export type SessionPhase =
   'opening' | 'ready' | 'syncing' | 'offline' | 'recovering' | 'error' | 'closed'
 
+export interface OutboundReplayProgress {
+  readonly total: number
+  readonly completed: number
+  readonly active: boolean
+}
+
 export interface SessionStatus {
   readonly phase: SessionPhase
   readonly transport: TransportConnectionState
+  // Durable records never yet successfully handed to the transport.
   readonly pendingOutbound: number
+  // Reconnect/restart replay progress; not remote acknowledgement.
+  readonly replay?: OutboundReplayProgress
   readonly recoveryRequired: boolean
   readonly lastReceivedAt?: number
   readonly lastSentAt?: number
@@ -778,6 +869,12 @@ code.
 entry to the current transport". It MUST NOT mean remote acknowledgement. If the
 transport is offline or rejects a send, durable records remain queued and the
 method MAY reject with a recoverable transport error.
+
+`SessionStatus.replay` is present after a reconnect/restart replay batch begins.
+`completed` advances only after the corresponding durable record has been accepted
+by the local transport adapter; `active: false` records the final local result for
+that batch. Applications MUST NOT present `completed === total` as a peer ack or as
+proof that a remote replica merged the change.
 
 `publishSnapshot()` creates a `snapshot` envelope for the current complete CRDT
 state and persists it as outbound recovery/checkpoint material before attempting
@@ -890,10 +987,13 @@ checkpoint cadence and thresholds are policy, not UI API.
 
 ## 10. Access-control application API
 
-Stability: **target shape; authenticated wire proof unresolved**.
+Stability: **implemented application shape; R6 authenticated bootstrap, replay-safe
+causal authorization, and signed fork reconciliation implemented**.
 
-Applications need a stable UI model even before the control-frame cryptographic
-representation is finalized.
+Applications can consume the current role/lifecycle model without depending on the
+transport ordering model. The authorization proof is complete within the documented
+authenticated-identity trust model; first-contact identity-key authenticity and
+freshness/transparency remain external deployment concerns.
 
 ### 10.1 Roles and participants
 
@@ -905,6 +1005,7 @@ export interface DocumentParticipant {
   readonly role: DocumentRole
   readonly displayName?: string
   readonly active: boolean
+  readonly identityKeyCommitment?: string
 }
 
 export interface DocumentAccessState {
@@ -913,19 +1014,36 @@ export interface DocumentAccessState {
   readonly archived: boolean
   readonly deleted: boolean
   readonly revision: number
+  readonly authorizationRoot?: string
+  readonly authorizationHead?: string
+  readonly authorizationStatus?: 'active' | 'conflict'
 }
 ```
 
-### 10.2 Target session commands
+`authorizationRoot` is the creator-signed shared-root commitment when the state is
+anchored by a verified R6 root. `authorizationHead` is the durable hexadecimal
+current authorization commitment. Both are absent only on explicitly unverified
+legacy anchor states. `identityKeyCommitment` binds verified-root participants to
+SHA-256 commitments of authenticated Ed25519 identity keys.
+`authorizationStatus: 'conflict'` means a valid same-predecessor authorization fork
+was detected and document/admin mutation is frozen fail-closed.
 
-Once R6 is implemented, `DocumentSession` is expected to gain admin/lifecycle
-operations similar to:
+### 10.2 Session commands
+
+`DocumentSession` currently implements these admin/lifecycle operations:
 
 ```ts
+inviteParticipant(phoneNumber: string, role: DocumentRole): Promise<void>
 setParticipantRole(participantId: string, role: DocumentRole): Promise<void>
 removeParticipant(participantId: string): Promise<void>
 archive(): Promise<void>
+unarchive(): Promise<void>
 deleteForGroup(): Promise<void>
+approveForkResolution(chosenControlId: string): Promise<ForkResolutionApproval>
+resolveFork(
+  chosenControlId: string,
+  approvals: readonly ForkResolutionApproval[]
+): Promise<void>
 ```
 
 Normative access behavior:
@@ -934,12 +1052,91 @@ Normative access behavior:
 - writers MAY edit but MUST NOT mutate membership/admin state;
 - admins MAY mutate membership and lifecycle state;
 - unauthorized inbound frames MUST be rejected before CRDT application;
+- signer cryptographic validity is insufficient by itself: the actor MUST have
+  been an active admin at the signed predecessor state;
+- a control whose predecessor is ahead of local knowledge MAY be durably buffered,
+  but MUST NOT mutate access state until its parent is known and valid;
+- a stale/superseded control MUST NOT roll the ACL backward, including after the
+  seen-message TTL expires or after restart;
+- competing valid controls from the same predecessor MUST fail closed as an
+  authorization conflict rather than use transport arrival order as authority;
+- a fork resolution MUST bind the exact common predecessor, competing control ids,
+  deterministic resulting ACL commitment, and next authorization revision;
+- resolution MUST carry signatures from the exact active-admin set at the common
+  predecessor and that set MUST contain at least two independent admins. A one-admin
+  fork therefore remains fail-closed;
+- on a verified root, control actors and fork approvers MUST still match the identity
+  keys committed by the predecessor authority state;
 - delete semantics MUST acknowledge that previously authorized devices may retain
-  local plaintext copies.
+  local plaintext copies and a delete branch MUST NOT be reconciled into a live state.
 
-Authentication/proof details remain **unresolved** pending the dedicated access
-semantics design. Applications can design role-aware UI now but MUST NOT claim
-secure authorization enforcement until that layer exists.
+R6 bootstrap is cryptographic rather than server-ACL based: a creator-signed root
+binds document, creator, participant role/active state, and participant identity-key
+commitments. Fresh devices verify that root from authenticated identity material and
+replay signed controls/resolutions to the supplied head. Group membership and the
+toy authorization endpoint are untrusted discovery/evidence cache surfaces. They
+cannot overwrite an established durable root/head. CRDT bootstrap is independent.
+
+Compatibility remains explicit: legacy revision-0 and revision>0 persisted ACLs are
+marked as unverified zero-genesis/local anchors and cannot be mistaken for a verified
+shared root. Outer `ProtocolEnvelope` stays v1; replay-safe controls are v2, while an
+authenticated membership invite uses payload v3 to bind the target identity key.
+
+Security scope: first-contact trust assumes authenticated identity-key material. A
+Byzantine identity directory before any key is pinned remains outside R6. Likewise,
+an untrusted evidence cache may censor or replay an older valid signed prefix to a
+brand-new device unless a separate freshness/transparency pin exists, but it cannot
+forge proof or roll back an established durable replica. R5 real-Signal evidence is
+separate and unchanged.
+
+### 10.3 Identity key-material lifecycle
+
+Stability: **implemented for signed-prekey rotation and one-time-prekey
+replenishment; long-term identity-key rebinding is intentionally unsupported**.
+
+`IdentityProvider.verifySession()` returns enough public state for deterministic
+maintenance without exposing private material:
+
+```ts
+export interface IdentitySessionClaim {
+  readonly userId: string
+  readonly phoneNumber: string
+  readonly displayName: string
+  readonly signedPrekeyPublic: string
+  readonly signedPrekeyRotationRequired: boolean
+  readonly prekeyCount: number
+  readonly createdAt: number
+}
+```
+
+`IdentityClient.openSession()` MUST:
+
+1. verify the session user/phone binding against durable local identity metadata;
+2. require the provider's signed-prekey public key to match the durable current key
+   or a durable pending rotation, otherwise fail closed;
+3. when rotation is requested, persist the new non-exportable X25519 private pair
+   before publishing its Ed25519-signed public half;
+4. retain the previous signed-prekey private pair after publication so an existing
+   encrypted-envelope `recipientKeySelector` can decrypt delayed ciphertext;
+5. when `prekeyCount < 5`, persist enough new X25519 one-time prekeys to target ten,
+   publish only their public halves, and mark them published only after provider
+   acceptance; and
+6. retry already-staged signed/one-time material after interrupted publication rather
+   than generating replacement private keys.
+
+The provider's signed-prekey update MUST verify the replacement signature against the
+existing Ed25519 identity key. Provider responses MUST echo the accepted public key
+and signature so the browser can reject material substitution.
+
+The long-term Ed25519 identity key is immutable under this lifecycle. In particular,
+directory replacement MUST NOT be treated as identity rotation: R6 authorization
+roots and causal controls bind the authenticated key and established replicas
+already fail closed when the current directory key no longer matches that binding.
+A future identity-key rotation API requires an explicit authenticated rebind and
+re-verification protocol that also preserves historical-signature verification.
+
+No `ProtocolEnvelope` change is required: it remains v1, and signed-prekey selection
+continues to use the existing encrypted-envelope public-key selector.
 
 ## 11. Local sidecar API
 
@@ -1135,12 +1332,14 @@ Transport choice MUST NOT change editor operations.
 Apps MUST be able to display at least:
 
 - ready/synced enough for normal work;
-- offline but local editing available;
-- syncing/replaying pending work;
+- offline but local editing available, including the durable local queue depth;
+- syncing/replaying pending work, including reconnect/restart replay progress;
 - recovering via checkpoint/snapshot;
+- an authorization-fork conflict when `DocumentAccessState.authorizationStatus === 'conflict'`;
 - unrecoverable client/storage error.
 
 "Connected" alone is not a sufficient user-facing synchronization state.
+Replay completion alone is likewise not sufficient evidence of remote acknowledgement.
 
 ## 13. `@e2e-col/testing`
 
@@ -1320,8 +1519,8 @@ recovering/error`), not boolean connected/disconnected.
 6. Keep protocol and transport bytes out of component state.
 7. Keep Signal concepts entirely outside application UI except optional
    diagnostics/setup screens.
-8. Model participant roles (`reader`, `writer`, `admin`) but keep privileged
-   controls feature-gated until authenticated access semantics land.
+8. Model participant roles (`reader`, `writer`, `admin`) and keep privileged
+   controls gated on the verified authorization state and local role.
 9. Do not assume a WebSocket send is remote acknowledgement.
 10. Keep document rendering independent from the current plain-text CRDT shape so
     structured block operations can be added later.
@@ -1353,10 +1552,10 @@ recovering/error`), not boolean connected/disconnected.
     - reassembleChunks
     - DedupCache
     - createProtocolId
-  unresolved:
-    - typed membership payload codec
-    - typed lifecycle payload codec
-    - authenticated control proof format
+    - typed membership/archive/delete payload codecs
+    - authorization-root proof codecs
+    - authorization-resolution proof codecs
+    - authenticated control commitments/signing bytes
 
 '@e2e-col/transport':
   candidate:
@@ -1385,7 +1584,7 @@ recovering/error`), not boolean connected/disconnected.
     - durable attempt/checkpoint metadata
 
 '@e2e-col/client':
-  target:
+  candidate:
     - CollaborativeClient
     - DocumentSession
     - SessionStatus
@@ -1460,7 +1659,7 @@ Implement:
 
 ### Milestone D — authenticated collaboration
 
-Implement/freeze:
+Implemented baseline / freeze during compatibility review:
 
 - role/membership control payload schemas;
 - authenticated authorization proof;

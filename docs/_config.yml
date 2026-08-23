@@ -1,0 +1,11 @@
+title: SignalCD Modern PoC
+description: Independent modern proof-of-concept implementation of the SignalCD construction from the USENIX Security 2026 E2EE-CD paper.
+url: https://signalcd-poc.fkr.dev
+baseurl: ""
+markdown: kramdown
+kramdown:
+  input: GFM
+permalink: pretty
+exclude:
+  - Gemfile
+  - Gemfile.lock

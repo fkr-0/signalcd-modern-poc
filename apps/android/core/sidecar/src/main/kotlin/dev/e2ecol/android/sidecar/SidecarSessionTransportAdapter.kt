@@ -11,5 +11,6 @@ class SidecarSessionTransportAdapter(
 ) : SessionTransport {
     override fun send(frame: ByteArray): Boolean = connection.send(frame)
     override fun close(): Boolean = connection.close()
-    override val isConnected: Boolean = true
+    override val isConnected: Boolean
+        get() = connection.isConnected
 }

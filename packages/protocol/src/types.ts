@@ -8,6 +8,7 @@ export const ENVELOPE_KINDS = [
   'archive',
   'delete',
   'health',
+  'authorization-resolution',
   'chunk'
 ] as const
 

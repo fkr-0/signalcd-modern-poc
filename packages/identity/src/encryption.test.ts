@@ -8,6 +8,8 @@ import type {
   RegisteredIdentityClaim,
   RegistrationPublicMaterial,
   RemoteIdentityBundle,
+  SignedPrekeyPublicMaterial,
+  SignedPrekeyRotationClaim,
   UserIdentity
 } from './types'
 
@@ -21,6 +23,7 @@ class PairProvider implements IdentityProvider {
   private readonly byPhone = new Map<string, ProviderRecord>()
   private readonly byToken = new Map<string, ProviderRecord>()
   private sequence = 0
+  rotationRequired = false
 
   async register(material: RegistrationPublicMaterial): Promise<RegisteredIdentityClaim> {
     this.sequence += 1
@@ -49,6 +52,9 @@ class PairProvider implements IdentityProvider {
       userId: record.userId,
       phoneNumber: record.phoneNumber,
       displayName: record.displayName,
+      signedPrekeyPublic: record.signedPrekeyPublic,
+      signedPrekeyRotationRequired: this.rotationRequired,
+      prekeyCount: record.prekeys.length,
       createdAt: record.createdAt
     }
   }
@@ -68,8 +74,30 @@ class PairProvider implements IdentityProvider {
     }
   }
 
-  async replenishPrekeys(): Promise<number> {
-    return 0
+  async replenishPrekeys(sessionToken: string, oneTimePrekeys: readonly string[]): Promise<number> {
+    const record = this.byToken.get(sessionToken)
+    if (!record) throw new Error('invalid session')
+    for (const prekey of oneTimePrekeys) {
+      if (!record.prekeys.includes(prekey)) record.prekeys.push(prekey)
+    }
+    return record.prekeys.length
+  }
+
+  async rotateSignedPrekey(
+    sessionToken: string,
+    material: SignedPrekeyPublicMaterial
+  ): Promise<SignedPrekeyRotationClaim> {
+    const record = this.byToken.get(sessionToken)
+    if (!record) throw new Error('invalid session')
+    const next: ProviderRecord = {
+      ...record,
+      signedPrekeyPublic: material.signedPrekeyPublic,
+      signedPrekeySignature: material.signedPrekeySignature
+    }
+    this.byToken.set(sessionToken, next)
+    this.byPhone.set(next.phoneNumber, next)
+    this.rotationRequired = false
+    return { ...material, rotatedAt: 1_700_000_100_000 }
   }
 }
 
@@ -79,7 +107,7 @@ async function pair() {
   const bobClient = new IdentityClient({ provider, storage: new MemoryIdentityStorage() })
   const alice = await aliceClient.register('Alice')
   const bob = await bobClient.register('Bob')
-  return { aliceClient, bobClient, alice, bob }
+  return { provider, aliceClient, bobClient, alice, bob }
 }
 
 function envelope(sender: UserIdentity, index = 1) {
@@ -156,5 +184,19 @@ describe('recipient-bound encrypted protocol envelopes', () => {
       latest = await aliceClient.encryptEnvelopeForRecipient(envelope(alice, index), bob, alice)
     expect(latest.recipientPrekeyKind).toBe('signed')
     expect(await bobClient.decryptEnvelope(latest, bob)).toEqual(envelope(alice, 11))
+  })
+
+  it('decrypts delayed ciphertext addressed to the signed prekey retired by rotation', async () => {
+    const { provider, aliceClient, bobClient, alice, bob } = await pair()
+    for (let index = 1; index <= 10; index += 1)
+      await aliceClient.encryptEnvelopeForRecipient(envelope(alice, index), bob, alice)
+    const delayed = await aliceClient.encryptEnvelopeForRecipient(envelope(alice, 11), bob, alice)
+    expect(delayed.recipientPrekeyKind).toBe('signed')
+
+    provider.rotationRequired = true
+    const rotatedBob = await bobClient.openSession()
+
+    expect(rotatedBob?.retiredSignedPrekeys).toHaveLength(1)
+    expect(await bobClient.decryptEnvelope(delayed, rotatedBob!)).toEqual(envelope(alice, 11))
   })
 })

@@ -2,7 +2,7 @@ import { indexedDB as baseIndexedDb } from 'fake-indexeddb'
 import { describe, expect, it } from 'vitest'
 import { IndexedDbCollaborativeStorage } from './indexeddb'
 
-type FailingStore = 'outbound' | 'seen_messages'
+type FailingStore = 'documents' | 'outbound' | 'seen_messages'
 
 function createFailingIndexedDbFactory(failingStore: FailingStore): IDBFactory {
   const wrapStore = (store: IDBObjectStore): IDBObjectStore =>
@@ -73,6 +73,35 @@ async function settleAbortedTransaction(): Promise<void> {
 }
 
 describe('IndexedDbCollaborativeStorage atomicity', () => {
+  it('keeps prior document metadata when the metadata transaction fails', async () => {
+    const name = `e2e-col-metadata-atomicity-${crypto.randomUUID()}`
+    const seed = new IndexedDbCollaborativeStorage({ name, indexedDB: baseIndexedDb })
+    await seed.saveDocument({
+      documentId: 'metadata-doc',
+      snapshot: new Uint8Array([9, 8, 7]),
+      updatedAt: 10,
+      metadata: { title: 'Stable title', category: 'keep' }
+    })
+    await seed.close()
+
+    const store = new IndexedDbCollaborativeStorage({
+      name,
+      indexedDB: createFailingIndexedDbFactory('documents')
+    })
+    await expect(
+      store.updateDocumentMetadata('metadata-doc', { title: 'Must not persist' }, 20)
+    ).rejects.toThrow('Injected documents write failure')
+
+    await settleAbortedTransaction()
+    expect(await store.loadDocument('metadata-doc')).toEqual({
+      documentId: 'metadata-doc',
+      snapshot: new Uint8Array([9, 8, 7]),
+      updatedAt: 10,
+      metadata: { title: 'Stable title', category: 'keep' }
+    })
+    await store.close()
+  })
+
   it('does not persist a local snapshot when the outbound write fails', async () => {
     const store = new IndexedDbCollaborativeStorage({
       name: `e2e-col-local-atomicity-${crypto.randomUUID()}`,

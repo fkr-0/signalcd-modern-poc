@@ -3,7 +3,9 @@ import type {
   IdentitySessionClaim,
   RegisteredIdentityClaim,
   RegistrationPublicMaterial,
-  RemoteIdentityBundle
+  RemoteIdentityBundle,
+  SignedPrekeyPublicMaterial,
+  SignedPrekeyRotationClaim
 } from './types'
 
 export interface HttpIdentityProviderOptions {
@@ -68,7 +70,31 @@ export class HttpIdentityProvider implements IdentityProvider {
         body: JSON.stringify({ one_time_prekeys: oneTimePrekeys })
       })
     )
-    return requiredNumber(value.prekey_count, 'prekey_count')
+    return requiredNonNegativeInteger(value.prekey_count, 'prekey_count')
+  }
+
+  async rotateSignedPrekey(
+    sessionToken: string,
+    material: SignedPrekeyPublicMaterial
+  ): Promise<SignedPrekeyRotationClaim> {
+    const value = asRecord(
+      await this.request('/api/v1/identity/keys/signed-prekey', {
+        method: 'POST',
+        headers: { ...authorization(sessionToken), 'content-type': 'application/json' },
+        body: JSON.stringify({
+          signed_prekey_public: material.signedPrekeyPublic,
+          signed_prekey_signature: material.signedPrekeySignature
+        })
+      })
+    )
+    return {
+      signedPrekeyPublic: requiredString(value.signed_prekey_public, 'signed_prekey_public'),
+      signedPrekeySignature: requiredString(
+        value.signed_prekey_signature,
+        'signed_prekey_signature'
+      ),
+      rotatedAt: requiredNumber(value.rotated_at, 'rotated_at')
+    }
   }
 
   private async request(path: string, init: RequestInit): Promise<unknown> {
@@ -115,6 +141,12 @@ function sessionClaim(value: unknown): IdentitySessionClaim {
     userId: requiredString(record.user_id, 'user_id'),
     phoneNumber: requiredString(record.phone_number, 'phone_number'),
     displayName: requiredString(record.display_name, 'display_name'),
+    signedPrekeyPublic: requiredString(record.signed_prekey_public, 'signed_prekey_public'),
+    signedPrekeyRotationRequired: requiredBoolean(
+      record.signed_prekey_rotation_required,
+      'signed_prekey_rotation_required'
+    ),
+    prekeyCount: requiredNonNegativeInteger(record.prekey_count, 'prekey_count'),
     createdAt: requiredNumber(record.created_at, 'created_at')
   }
 }
@@ -135,7 +167,7 @@ function remoteBundle(value: unknown): RemoteIdentityBundle {
       'signed_prekey_signature'
     ),
     ...(oneTimePrekey === undefined ? {} : { oneTimePrekey }),
-    remainingPrekeys: requiredNumber(record.remaining_prekeys, 'remaining_prekeys')
+    remainingPrekeys: requiredNonNegativeInteger(record.remaining_prekeys, 'remaining_prekeys')
   }
 }
 
@@ -151,10 +183,22 @@ function requiredString(value: unknown, name: string): string {
   return value
 }
 
+function requiredBoolean(value: unknown, name: string): boolean {
+  if (typeof value !== 'boolean') throw new Error(`identity provider response is missing ${name}`)
+  return value
+}
+
 function requiredNumber(value: unknown, name: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value))
     throw new Error(`identity provider response is missing ${name}`)
   return value
+}
+
+function requiredNonNegativeInteger(value: unknown, name: string): number {
+  const number = requiredNumber(value, name)
+  if (!Number.isInteger(number) || number < 0)
+    throw new Error(`identity provider response has invalid ${name}`)
+  return number
 }
 
 function stringArray(value: unknown, name: string): readonly string[] {

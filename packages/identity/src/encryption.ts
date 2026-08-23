@@ -145,12 +145,16 @@ async function resolveRecipientPrivateKey(
   identity: UserIdentity
 ): Promise<CryptoKey> {
   if (encrypted.recipientPrekeyKind === 'signed') {
-    if (
-      (await publicKeyFingerprint(identity.signedPrekeyPair.publicKey)) !==
-      encrypted.recipientKeySelector
-    )
-      throw new Error('encrypted envelope signed-prekey selector is unknown')
-    return identity.signedPrekeyPair.privateKey
+    const candidates = [
+      identity.signedPrekeyPair,
+      ...identity.retiredSignedPrekeys,
+      ...(identity.pendingSignedPrekey === undefined ? [] : [identity.pendingSignedPrekey])
+    ]
+    for (const prekey of candidates) {
+      if ((await publicKeyFingerprint(prekey.publicKey)) === encrypted.recipientKeySelector)
+        return prekey.privateKey
+    }
+    throw new Error('encrypted envelope signed-prekey selector is unknown')
   }
   for (const prekey of identity.oneTimePrekeys) {
     if ((await publicKeyFingerprint(prekey.publicKey)) === encrypted.recipientKeySelector)

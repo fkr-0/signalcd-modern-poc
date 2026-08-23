@@ -5,12 +5,15 @@ interface IdentityRecord {
   readonly phoneNumber: string
   readonly displayName: string
   readonly identityKeyPublic: string
-  readonly signedPrekeyPublic: string
-  readonly signedPrekeySignature: string
+  signedPrekeyPublic: string
+  signedPrekeySignature: string
+  signedPrekeyRotatedAt: number
   readonly oneTimePrekeys: string[]
   readonly sessionToken: string
   readonly createdAt: number
 }
+
+export const SIGNED_PREKEY_ROTATION_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000
 
 function publicIdentity(record: IdentityRecord): AuthenticatedIdentity {
   return {
@@ -137,6 +140,7 @@ export class IdentityRegistry {
       identityKeyPublic: request.identity_key_public,
       signedPrekeyPublic: request.signed_prekey_public,
       signedPrekeySignature: request.signed_prekey_signature,
+      signedPrekeyRotatedAt: this.now(),
       oneTimePrekeys: [...new Set(oneTimePrekeys)],
       sessionToken: randomBytes(32).toString('base64url'),
       createdAt: this.now()
@@ -149,7 +153,7 @@ export class IdentityRegistry {
 
   session(authorization: string | undefined): Record<string, unknown> {
     const record = this.authorize(authorization)
-    return sessionResponse(record)
+    return sessionResponse(record, this.now())
   }
 
   lookup(phoneNumber: string, authorization: string | undefined): Record<string, unknown> {
@@ -183,6 +187,35 @@ export class IdentityRegistry {
       if (!record.oneTimePrekeys.includes(value)) record.oneTimePrekeys.push(value)
     }
     return { prekey_count: record.oneTimePrekeys.length }
+  }
+
+  async rotateSignedPrekey(
+    authorization: string | undefined,
+    signedPrekeyPublic: unknown,
+    signedPrekeySignature: unknown
+  ): Promise<Record<string, unknown>> {
+    const record = this.authorize(authorization)
+    const signedPrekey = decodeBase64(signedPrekeyPublic, 32, 'signed_prekey_public')
+    const signature = decodeBase64(signedPrekeySignature, 64, 'signed_prekey_signature')
+    const identityKey = decodeBase64(record.identityKeyPublic, 32, 'identity_key_public')
+    const publicKey = await webcrypto.subtle.importKey(
+      'raw',
+      identityKey,
+      { name: 'Ed25519' },
+      false,
+      ['verify']
+    )
+    if (!(await webcrypto.subtle.verify({ name: 'Ed25519' }, publicKey, signature, signedPrekey)))
+      throw new IdentityApiError(400, 'signed prekey signature is invalid')
+
+    record.signedPrekeyPublic = signedPrekeyPublic as string
+    record.signedPrekeySignature = signedPrekeySignature as string
+    record.signedPrekeyRotatedAt = this.now()
+    return {
+      signed_prekey_public: record.signedPrekeyPublic,
+      signed_prekey_signature: record.signedPrekeySignature,
+      rotated_at: record.signedPrekeyRotatedAt
+    }
   }
 
   view(): IdentityRegistryView {
@@ -229,11 +262,14 @@ function registrationResponse(record: IdentityRecord): Record<string, unknown> {
   }
 }
 
-function sessionResponse(record: IdentityRecord): Record<string, unknown> {
+function sessionResponse(record: IdentityRecord, now: number): Record<string, unknown> {
   return {
     user_id: record.userId,
     phone_number: record.phoneNumber,
     display_name: record.displayName,
+    signed_prekey_public: record.signedPrekeyPublic,
+    signed_prekey_rotation_required:
+      now - record.signedPrekeyRotatedAt >= SIGNED_PREKEY_ROTATION_INTERVAL_MS,
     prekey_count: record.oneTimePrekeys.length,
     created_at: record.createdAt
   }

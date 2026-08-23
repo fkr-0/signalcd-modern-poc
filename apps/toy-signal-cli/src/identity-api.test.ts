@@ -1,6 +1,9 @@
 import { webcrypto } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { IdentityRegistrationRequest } from './identity-registry'
+import {
+  type IdentityRegistrationRequest,
+  SIGNED_PREKEY_ROTATION_INTERVAL_MS
+} from './identity-registry'
 import { ToySignalCliServer } from './server'
 
 const running: ToySignalCliServer[] = []
@@ -103,12 +106,97 @@ describe('mock identity HTTP API', () => {
     })
     expect(sessionResponse.status).toBe(401)
   })
+
+  it('requests periodic signed-prekey rotation and accepts only identity-signed replacement keys', async () => {
+    let now = 1_700_000_000_000
+    const server = new ToySignalCliServer({ port: 0, now: () => now })
+    running.push(server)
+    const { baseUrl } = await server.start()
+    const fixture = await createRegistrationFixture('Katherine')
+    const registeredResponse = await fetch(`${baseUrl}/api/v1/identity/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(fixture.request)
+    })
+    expect(registeredResponse.status).toBe(201)
+    const registered = asRecord(await registeredResponse.json())
+    const token = String(registered.session_token)
+
+    const fresh = asRecord(await jsonFetch(`${baseUrl}/api/v1/identity/session`, token))
+    expect(fresh.signed_prekey_rotation_required).toBe(false)
+    expect(fresh.signed_prekey_public).toBe(fixture.request.signed_prekey_public)
+
+    now += SIGNED_PREKEY_ROTATION_INTERVAL_MS
+    const due = asRecord(await jsonFetch(`${baseUrl}/api/v1/identity/session`, token))
+    expect(due.signed_prekey_rotation_required).toBe(true)
+
+    const replacement = await signedPrekeyMaterial(fixture.identity.privateKey)
+    const rotatedResponse = await fetch(`${baseUrl}/api/v1/identity/keys/signed-prekey`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        signed_prekey_public: replacement.publicKey,
+        signed_prekey_signature: replacement.signature
+      })
+    })
+    expect(rotatedResponse.status).toBe(200)
+    const rotated = asRecord(await rotatedResponse.json())
+    expect(rotated.signed_prekey_public).toBe(replacement.publicKey)
+    expect(rotated.rotated_at).toBe(now)
+
+    const current = asRecord(await jsonFetch(`${baseUrl}/api/v1/identity/session`, token))
+    expect(current.signed_prekey_public).toBe(replacement.publicKey)
+    expect(current.signed_prekey_rotation_required).toBe(false)
+
+    const invalidReplacement = await signedPrekeyMaterial(
+      asNodeKeyPair(
+        await webcrypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify'])
+      ).privateKey
+    )
+    const invalidResponse = await fetch(`${baseUrl}/api/v1/identity/keys/signed-prekey`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        signed_prekey_public: invalidReplacement.publicKey,
+        signed_prekey_signature: invalidReplacement.signature
+      })
+    })
+    expect(invalidResponse.status).toBe(400)
+    expect(
+      asRecord(await jsonFetch(`${baseUrl}/api/v1/identity/session`, token)).signed_prekey_public
+    ).toBe(replacement.publicKey)
+  })
 })
 
 async function createRegistration(displayName: string): Promise<IdentityRegistrationRequest> {
+  return (await createRegistrationFixture(displayName)).request
+}
+
+async function createRegistrationFixture(displayName: string): Promise<{
+  request: IdentityRegistrationRequest
+  identity: { publicKey: NodeCryptoKey; privateKey: NodeCryptoKey }
+}> {
   const identity = asNodeKeyPair(
     await webcrypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify'])
   )
+  const signedPrekey = await signedPrekeyMaterial(identity.privateKey)
+  return {
+    identity,
+    request: {
+      display_name: displayName,
+      identity_key_public: base64(
+        new Uint8Array(await webcrypto.subtle.exportKey('raw', identity.publicKey))
+      ),
+      signed_prekey_public: signedPrekey.publicKey,
+      signed_prekey_signature: signedPrekey.signature,
+      one_time_prekeys: [await x25519Public(), await x25519Public()]
+    }
+  }
+}
+
+async function signedPrekeyMaterial(
+  identityPrivateKey: NodeCryptoKey
+): Promise<{ publicKey: string; signature: string }> {
   const signedPrekey = asNodeKeyPair(
     await webcrypto.subtle.generateKey({ name: 'X25519' }, false, ['deriveBits'])
   )
@@ -116,17 +204,9 @@ async function createRegistration(displayName: string): Promise<IdentityRegistra
     await webcrypto.subtle.exportKey('raw', signedPrekey.publicKey)
   )
   const signature = new Uint8Array(
-    await webcrypto.subtle.sign({ name: 'Ed25519' }, identity.privateKey, signedPrekeyPublic)
+    await webcrypto.subtle.sign({ name: 'Ed25519' }, identityPrivateKey, signedPrekeyPublic)
   )
-  return {
-    display_name: displayName,
-    identity_key_public: base64(
-      new Uint8Array(await webcrypto.subtle.exportKey('raw', identity.publicKey))
-    ),
-    signed_prekey_public: base64(signedPrekeyPublic),
-    signed_prekey_signature: base64(signature),
-    one_time_prekeys: [await x25519Public(), await x25519Public()]
-  }
+  return { publicKey: base64(signedPrekeyPublic), signature: base64(signature) }
 }
 
 async function x25519Public(): Promise<string> {

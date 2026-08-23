@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
   archivePayloadSigningBytes,
+  authorizationControlCommitment,
+  authorizationGenesisPredecessor,
+  authorizationStateCommitment,
   decodeArchivePayload,
+  decodeAuthorizationCommitment,
   decodeDeletePayload,
   decodeMembershipPayload,
   deletePayloadSigningBytes,
   encodeArchivePayload,
+  encodeAuthorizationCommitment,
   encodeDeletePayload,
   encodeMembershipPayload,
   membershipPayloadSigningBytes
@@ -13,11 +18,18 @@ import {
 import { ProtocolValidationError } from './validation'
 
 const signature = Uint8Array.from({ length: 64 }, (_, index) => index)
+const documentId = '11111111-1111-4111-8111-111111111111'
+const predecessor = authorizationGenesisPredecessor()
+
+function proof(revision = 1) {
+  return { documentId, revision, predecessor }
+}
 
 describe('access-control payload codecs', () => {
   it('round-trips membership actions and copies signature bytes', () => {
     for (const value of [
       {
+        ...proof(),
         action: 'invite' as const,
         targetUserId: 'target',
         role: 'writer' as const,
@@ -26,6 +38,7 @@ describe('access-control payload codecs', () => {
         signature
       },
       {
+        ...proof(),
         action: 'remove' as const,
         targetUserId: 'target',
         role: null,
@@ -34,6 +47,7 @@ describe('access-control payload codecs', () => {
         signature
       },
       {
+        ...proof(),
         action: 'role_change' as const,
         targetUserId: 'target',
         role: 'reader' as const,
@@ -49,8 +63,20 @@ describe('access-control payload codecs', () => {
   })
 
   it('round-trips archive and delete payloads', () => {
-    const archive = { action: 'unarchive' as const, actorUserId: 'admin', timestamp: 11, signature }
-    const deleted = { action: 'delete' as const, actorUserId: 'admin', timestamp: 12, signature }
+    const archive = {
+      ...proof(),
+      action: 'unarchive' as const,
+      actorUserId: 'admin',
+      timestamp: 11,
+      signature
+    }
+    const deleted = {
+      ...proof(),
+      action: 'delete' as const,
+      actorUserId: 'admin',
+      timestamp: 12,
+      signature
+    }
     expect(decodeArchivePayload(encodeArchivePayload(archive))).toEqual(archive)
     expect(decodeDeletePayload(encodeDeletePayload(deleted))).toEqual(deleted)
   })
@@ -58,6 +84,7 @@ describe('access-control payload codecs', () => {
   it('rejects invalid role/action combinations and malformed signatures', () => {
     expect(() =>
       encodeMembershipPayload({
+        ...proof(),
         action: 'remove',
         targetUserId: 'target',
         role: 'writer',
@@ -68,6 +95,7 @@ describe('access-control payload codecs', () => {
     ).toThrow(ProtocolValidationError)
     expect(() =>
       encodeArchivePayload({
+        ...proof(),
         action: 'archive',
         actorUserId: 'admin',
         timestamp: 1,
@@ -78,6 +106,7 @@ describe('access-control payload codecs', () => {
 
   it('uses deterministic signature preimages without embedding the signature', () => {
     const value = {
+      ...proof(),
       action: 'invite' as const,
       targetUserId: 'target',
       role: 'admin' as const,
@@ -94,6 +123,7 @@ describe('access-control payload codecs', () => {
 
   it('rejects trailing bytes', () => {
     const encoded = encodeDeletePayload({
+      ...proof(),
       action: 'delete',
       actorUserId: 'admin',
       timestamp: 1,
@@ -106,6 +136,7 @@ describe('access-control payload codecs', () => {
 
   it('rejects membership with unsupported action codes decoded from raw bytes', () => {
     const valid = encodeMembershipPayload({
+      ...proof(),
       action: 'invite',
       targetUserId: 'target',
       role: 'writer',
@@ -121,6 +152,7 @@ describe('access-control payload codecs', () => {
 
   it('rejects archive with unsupported action codes decoded from raw bytes', () => {
     const valid = encodeArchivePayload({
+      ...proof(),
       action: 'archive',
       actorUserId: 'admin',
       timestamp: 1,
@@ -134,6 +166,7 @@ describe('access-control payload codecs', () => {
   it('rejects membership encode with invalid action string', () => {
     expect(() =>
       encodeMembershipPayload({
+        ...proof(),
         action: 'bogus' as 'invite',
         targetUserId: 'target',
         role: 'writer',
@@ -147,6 +180,7 @@ describe('access-control payload codecs', () => {
   it('rejects archive encode with invalid action string', () => {
     expect(() =>
       encodeArchivePayload({
+        ...proof(),
         action: 'bogus' as 'archive',
         actorUserId: 'admin',
         timestamp: 1,
@@ -157,6 +191,7 @@ describe('access-control payload codecs', () => {
 
   it('signature round-trip: signing bytes are deterministically recoverable from payload fields', () => {
     const value = {
+      ...proof(),
       action: 'invite' as const,
       targetUserId: 'target',
       role: 'admin' as const,
@@ -173,7 +208,7 @@ describe('access-control payload codecs', () => {
   })
 
   it('archive signing bytes are deterministic and distinct from encoded payload', () => {
-    const value = { action: 'archive' as const, actorUserId: 'admin', timestamp: 100 }
+    const value = { ...proof(), action: 'archive' as const, actorUserId: 'admin', timestamp: 100 }
     const signingA = archivePayloadSigningBytes(value)
     const signingB = archivePayloadSigningBytes(value)
     expect(signingA).toEqual(signingB)
@@ -183,7 +218,7 @@ describe('access-control payload codecs', () => {
   })
 
   it('delete signing bytes are deterministic and distinct from encoded payload', () => {
-    const value = { action: 'delete' as const, actorUserId: 'admin', timestamp: 200 }
+    const value = { ...proof(), action: 'delete' as const, actorUserId: 'admin', timestamp: 200 }
     const signingA = deletePayloadSigningBytes(value)
     const signingB = deletePayloadSigningBytes(value)
     expect(signingA).toEqual(signingB)
@@ -195,6 +230,7 @@ describe('access-control payload codecs', () => {
   it('rejects empty-string IDs in membership', () => {
     expect(() =>
       encodeMembershipPayload({
+        ...proof(),
         action: 'invite',
         targetUserId: '',
         role: 'writer',
@@ -205,6 +241,7 @@ describe('access-control payload codecs', () => {
     ).toThrow(ProtocolValidationError)
     expect(() =>
       encodeMembershipPayload({
+        ...proof(),
         action: 'invite',
         targetUserId: 'target',
         role: 'writer',
@@ -218,6 +255,7 @@ describe('access-control payload codecs', () => {
   it('rejects empty-string IDs in archive', () => {
     expect(() =>
       encodeArchivePayload({
+        ...proof(),
         action: 'archive',
         actorUserId: '',
         timestamp: 1,
@@ -229,6 +267,7 @@ describe('access-control payload codecs', () => {
   it('rejects empty-string IDs in delete', () => {
     expect(() =>
       encodeDeletePayload({
+        ...proof(),
         action: 'delete',
         actorUserId: '',
         timestamp: 1,
@@ -242,6 +281,7 @@ describe('access-control payload codecs', () => {
     const maxId = 'x'.repeat(512)
     expect(() =>
       encodeMembershipPayload({
+        ...proof(),
         action: 'invite',
         targetUserId: maxId,
         role: 'writer',
@@ -256,6 +296,7 @@ describe('access-control payload codecs', () => {
     const overMax = 'x'.repeat(513)
     expect(() =>
       encodeMembershipPayload({
+        ...proof(),
         action: 'invite',
         targetUserId: overMax,
         role: 'writer',
@@ -269,6 +310,7 @@ describe('access-control payload codecs', () => {
   it('rejects membership with remove action and non-null role', () => {
     expect(() =>
       encodeMembershipPayload({
+        ...proof(),
         action: 'remove',
         targetUserId: 'target',
         role: 'admin',
@@ -282,6 +324,7 @@ describe('access-control payload codecs', () => {
   it('rejects membership with invite action and null role', () => {
     expect(() =>
       encodeMembershipPayload({
+        ...proof(),
         action: 'invite',
         targetUserId: 'target',
         role: null,
@@ -294,6 +337,7 @@ describe('access-control payload codecs', () => {
 
   it('round-trips membership with multi-byte UTF-8 IDs', () => {
     const value = {
+      ...proof(),
       action: 'invite' as const,
       targetUserId: 'user-日本語-test',
       role: 'writer' as const,
@@ -308,6 +352,7 @@ describe('access-control payload codecs', () => {
   it('round-trips archive and delete with max-length actor IDs', () => {
     const maxId = 'a'.repeat(512)
     const archiveValue = {
+      ...proof(),
       action: 'archive' as const,
       actorUserId: maxId,
       timestamp: 1,
@@ -316,11 +361,102 @@ describe('access-control payload codecs', () => {
     expect(decodeArchivePayload(encodeArchivePayload(archiveValue))).toEqual(archiveValue)
 
     const deleteValue = {
+      ...proof(),
       action: 'delete' as const,
       actorUserId: maxId,
       timestamp: 2,
       signature
     }
     expect(decodeDeletePayload(encodeDeletePayload(deleteValue))).toEqual(deleteValue)
+  })
+
+  it('binds signatures and control commitments to document, revision, and predecessor', async () => {
+    const base = {
+      ...proof(),
+      action: 'archive' as const,
+      actorUserId: 'admin',
+      timestamp: 123
+    }
+    const baseBytes = archivePayloadSigningBytes(base)
+    const changedDocument = archivePayloadSigningBytes({
+      ...base,
+      documentId: '22222222-2222-4222-8222-222222222222'
+    })
+    const changedRevision = archivePayloadSigningBytes({ ...base, revision: 2 })
+    const changedPredecessor = archivePayloadSigningBytes({
+      ...base,
+      predecessor: Uint8Array.from({ length: 32 }, () => 1)
+    })
+    expect(changedDocument).not.toEqual(baseBytes)
+    expect(changedRevision).not.toEqual(baseBytes)
+    expect(changedPredecessor).not.toEqual(baseBytes)
+    expect(await authorizationControlCommitment(changedRevision)).not.toEqual(
+      await authorizationControlCommitment(baseBytes)
+    )
+  })
+
+  it('rejects legacy v1 controls and malformed predecessor evidence', () => {
+    const encoded = encodeArchivePayload({
+      ...proof(),
+      action: 'archive',
+      actorUserId: 'admin',
+      timestamp: 1,
+      signature
+    })
+    const legacy = new Uint8Array(encoded)
+    legacy[0] = 1
+    expect(() => decodeArchivePayload(legacy)).toThrow(/legacy v1 controls are not replay-safe/)
+    expect(() =>
+      encodeArchivePayload({
+        ...proof(),
+        predecessor: new Uint8Array(31),
+        action: 'archive',
+        actorUserId: 'admin',
+        timestamp: 1,
+        signature
+      })
+    ).toThrow(/predecessor/)
+  })
+
+  it('round-trips authorization commitments without ambiguity', () => {
+    const encoded = encodeAuthorizationCommitment(predecessor)
+    expect(encoded).toHaveLength(64)
+    expect(decodeAuthorizationCommitment(encoded)).toEqual(predecessor)
+    expect(() => decodeAuthorizationCommitment('not-a-head')).toThrow(ProtocolValidationError)
+  })
+
+  it('canonicalizes semantic authorization state for legacy migration anchors', async () => {
+    const state = {
+      selfRole: 'admin' as const,
+      participants: [
+        { participantId: 'b', role: 'writer' as const, displayName: 'Bee', active: true },
+        { participantId: 'a', role: 'admin' as const, displayName: 'Ay', active: true }
+      ],
+      archived: false,
+      deleted: false,
+      revision: 4
+    }
+    const sameSemantics = {
+      ...state,
+      selfRole: 'writer' as const,
+      participants: [...state.participants].reverse().map((participant) => ({
+        ...participant,
+        displayName: `other-${participant.participantId}`
+      }))
+    }
+    const changed = {
+      ...state,
+      participants: state.participants.map((participant) =>
+        participant.participantId === 'b'
+          ? { ...participant, role: 'reader' as const }
+          : participant
+      )
+    }
+    expect(await authorizationStateCommitment(documentId, sameSemantics)).toEqual(
+      await authorizationStateCommitment(documentId, state)
+    )
+    expect(await authorizationStateCommitment(documentId, changed)).not.toEqual(
+      await authorizationStateCommitment(documentId, state)
+    )
   })
 })

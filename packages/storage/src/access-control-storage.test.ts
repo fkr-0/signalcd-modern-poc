@@ -6,7 +6,8 @@ import {
   cloneAccessState,
   DEFAULT_SEEN_MESSAGE_TTL_MS,
   normalizeSeenMessageTtlMs,
-  type OutboundRecord
+  type OutboundRecord,
+  type StoredAuthorizationState
 } from './storage'
 
 const access: DocumentAccessState = {
@@ -18,6 +19,27 @@ const access: DocumentAccessState = {
   archived: false,
   deleted: false,
   revision: 2
+}
+
+const authorization: StoredAuthorizationState = {
+  version: 2,
+  anchorHead: '00'.repeat(32),
+  anchorAccess: { ...access, revision: 0 },
+  head: '11'.repeat(32),
+  records: [
+    {
+      controlId: '11'.repeat(32),
+      kind: 'archive',
+      predecessor: '00'.repeat(32),
+      revision: 1,
+      senderId: 'owner',
+      messageId: 'control-message',
+      payload: new Uint8Array([1, 2, 3]),
+      receivedAt: 20,
+      resultingAccess: { ...access, revision: 1, authorizationHead: '11'.repeat(32) }
+    }
+  ],
+  pending: []
 }
 
 for (const [name, create] of [
@@ -34,6 +56,36 @@ for (const [name, create] of [
       const loaded = await store.loadAccessControl('doc')
       expect(loaded).toEqual(access)
       expect(loaded?.participants).not.toBe(access.participants)
+      await store.close()
+    })
+
+    it('preserves authorization history when ordinary access metadata is refreshed', async () => {
+      const store = create()
+      await store.commitAccessChange({
+        documentId: 'auth-preserve',
+        access,
+        authorization,
+        outbound: []
+      })
+      await store.saveAccessControl('auth-preserve', { ...access, archived: true })
+      expect(await store.loadAuthorizationState('auth-preserve')).toEqual(authorization)
+      await store.close()
+    })
+
+    it('persists replay-safe authorization history atomically with access state', async () => {
+      const store = create()
+      await store.commitAccessChange({
+        documentId: 'auth-doc',
+        access,
+        authorization,
+        outbound: []
+      })
+      const loaded = await store.loadAuthorizationState('auth-doc')
+      expect(loaded).toEqual(authorization)
+      expect(loaded?.records[0]?.payload).not.toBe(authorization.records[0]?.payload)
+      expect(loaded?.records[0]?.resultingAccess.participants).not.toBe(
+        authorization.records[0]?.resultingAccess.participants
+      )
       await store.close()
     })
 

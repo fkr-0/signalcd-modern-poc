@@ -42,6 +42,104 @@ describe('encrypted collaboration groups and routing', () => {
     expect(addedResponse.status).toBe(200)
     expect(asRecords(asRecord(await addedResponse.json()).members)).toHaveLength(2)
 
+    const rootCommitment = 'a'.repeat(64)
+    const headCommitment = 'b'.repeat(64)
+    const evidenceResponse = await fetch(`${baseUrl}/api/v1/groups/${groupId}/authorization`, {
+      method: 'POST',
+      headers: authJson(alice.token),
+      body: JSON.stringify({
+        version: 1,
+        root_commitment: rootCommitment,
+        head_commitment: headCommitment,
+        roots: [Buffer.from([1, 2, 3]).toString('base64')],
+        controls: [
+          {
+            kind: 'membership',
+            sender_id: alice.userId,
+            message_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            payload_base64: Buffer.from([4, 5, 6]).toString('base64'),
+            received_at: 1_700_000_000_001
+          }
+        ],
+        resolutions: []
+      })
+    })
+    expect(evidenceResponse.status).toBe(200)
+    const bobEvidence = asRecord(
+      await (
+        await fetch(`${baseUrl}/api/v1/groups/${groupId}/authorization`, {
+          headers: { authorization: `Bearer ${bob.token}` }
+        })
+      ).json()
+    )
+    expect(bobEvidence).toMatchObject({
+      version: 1,
+      expected_root: rootCommitment,
+      expected_head: headCommitment
+    })
+    expect(asRecords(bobEvidence.controls)).toHaveLength(1)
+
+    const republishedObservation = await fetch(
+      `${baseUrl}/api/v1/groups/${groupId}/authorization`,
+      {
+        method: 'POST',
+        headers: authJson(bob.token),
+        body: JSON.stringify({
+          version: 1,
+          root_commitment: rootCommitment,
+          head_commitment: headCommitment,
+          roots: [],
+          controls: [
+            {
+              kind: 'membership',
+              sender_id: alice.userId,
+              message_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+              payload_base64: Buffer.from([4, 5, 6]).toString('base64'),
+              received_at: 1_700_000_000_999
+            }
+          ],
+          resolutions: []
+        })
+      }
+    )
+    expect(republishedObservation.status).toBe(200)
+
+    const changedEvidence = await fetch(`${baseUrl}/api/v1/groups/${groupId}/authorization`, {
+      method: 'POST',
+      headers: authJson(bob.token),
+      body: JSON.stringify({
+        version: 1,
+        root_commitment: rootCommitment,
+        head_commitment: headCommitment,
+        roots: [],
+        controls: [
+          {
+            kind: 'membership',
+            sender_id: alice.userId,
+            message_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            payload_base64: Buffer.from([9, 9, 9]).toString('base64'),
+            received_at: 1_700_000_000_999
+          }
+        ],
+        resolutions: []
+      })
+    })
+    expect(changedEvidence.status).toBe(409)
+
+    const conflictingRoot = await fetch(`${baseUrl}/api/v1/groups/${groupId}/authorization`, {
+      method: 'POST',
+      headers: authJson(alice.token),
+      body: JSON.stringify({
+        version: 1,
+        root_commitment: 'c'.repeat(64),
+        head_commitment: headCommitment,
+        roots: [],
+        controls: [],
+        resolutions: []
+      })
+    })
+    expect(conflictingRoot.status).toBe(409)
+
     const duplicateResponse = await fetch(`${baseUrl}/api/v1/groups/${groupId}/members`, {
       method: 'POST',
       headers: authJson(alice.token),

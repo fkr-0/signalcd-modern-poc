@@ -3,7 +3,12 @@ import { MemoryCollaborativeStorage } from '@e2e-col/storage'
 import { DeterministicTransportNetwork, type SimulatedTransport } from '@e2e-col/transport'
 import { describe, expect, it } from 'vitest'
 import { DocumentSession } from './session'
-import type { ClientIdentityAdapter, DocumentSessionEvent, SessionPhase } from './types'
+import type {
+  ClientIdentityAdapter,
+  DocumentSessionEvent,
+  OutboundReplayProgress,
+  SessionPhase
+} from './types'
 
 const documentId = '11111111-1111-4111-8111-111111111111'
 
@@ -44,6 +49,7 @@ function createSession(): {
     identity: lifecycleIdentity(),
     now: () => ++now,
     createMessageId: () => `22222222-2222-4222-8222-${String(++message).padStart(12, '0')}`,
+    allowAuthorizationRootCreation: false,
     replayAttemptedOnReconnect: true,
     publishSnapshotOnRecoverySignal: false,
     onClosed: () => undefined
@@ -73,8 +79,12 @@ describe('DocumentSession lifecycle', () => {
   it('transitions opening -> ready -> offline -> syncing -> ready across reconnect replay', async () => {
     const { session, transport } = createSession()
     const phases: SessionPhase[] = [session.getStatus().phase]
+    const replay: OutboundReplayProgress[] = []
     const unsubscribe = session.subscribe((event: DocumentSessionEvent) => {
-      if (event.type === 'status') phases.push(event.status.phase)
+      if (event.type === 'status') {
+        phases.push(event.status.phase)
+        if (event.status.replay) replay.push(event.status.replay)
+      }
     })
 
     await session.open()
@@ -86,6 +96,9 @@ describe('DocumentSession lifecycle', () => {
 
     await transport.disconnect()
     expect(session.getStatus().phase).toBe('offline')
+    await session.editText('edited while offline')
+    expect(session.getView().text).toBe('edited while offline')
+    expect(session.getStatus()).toMatchObject({ phase: 'offline', pendingOutbound: 2 })
 
     await transport.connect(documentId)
     await tick()
@@ -93,6 +106,11 @@ describe('DocumentSession lifecycle', () => {
 
     expect(session.getStatus().phase).toBe('ready')
     expect(session.getStatus().pendingOutbound).toBe(0)
+    expect(session.getStatus().replay).toEqual({ total: 2, completed: 2, active: false })
+    expect(replay).toContainEqual({ total: 2, completed: 0, active: true })
+    expect(replay).toContainEqual({ total: 2, completed: 1, active: true })
+    expect(replay).toContainEqual({ total: 2, completed: 2, active: true })
+    expect(replay.at(-1)).toEqual({ total: 2, completed: 2, active: false })
     expectOrderedPhases(phases, ['opening', 'ready', 'offline', 'syncing', 'ready'])
 
     unsubscribe()

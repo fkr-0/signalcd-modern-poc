@@ -6,8 +6,40 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-08-23
+
 ### Added
 
+- Public technical-preview identity **SignalCD Modern PoC**, preserving the explicit connection to the SignalCD system from the USENIX Security 2026 E2EE-CD paper while distinguishing this repository from the authors' prototype and from official Signal projects.
+- Documentation landing page organized around current state, architecture, done/not-done capability matrix, release/Signal/Android FAQ, implemented workflow diagrams, missing workflow diagrams, release artifacts, and research lineage.
+- Canonical `docs/RESEARCH-PROVENANCE.md` explaining the paper → generic E2EE-CD construction → SignalCD → authors' SPRING/EPFL prototype → this independent implementation relationship.
+- Generated API documentation for the public client/core/identity/protocol/storage/transport package entry points, with GitHub Pages publication under `/api/` and tagged API-doc archives.
+- GitHub Pages workflow and tagged release-artifact workflow producing the browser build, Android debug APK, sidecar/protocol source archive, API documentation archive, and SHA-256 manifest.
+- Reproducible PoC screenshot capture (`pnpm run docs:screenshots`) plus captured two-browser encrypted-convergence/inspector images for the documentation landing page.
+- A real-`signal-cli` validation experiment and explicit help-wanted matrix covering two-account bidirectional convergence, restart/replay, daemon compatibility drift, and sanitized evidence collection.
+
+- P2 multi-document local title editing: `CollaborativeClient.updateDocumentMetadata()`
+  and the web Local library now rename device-local display metadata without changing
+  immutable document UUID, CRDT content, collaboration group binding, authorization
+  root/head/revision, participant ACL, or outbound history. Titles normalize to one
+  trimmed line (200 JavaScript string code units), blank/null clears to the stable
+  UUID-derived fallback, and additive metadata fields are retained.
+- Durable metadata-only IndexedDB updates with injected-failure coverage, stale-session
+  race protection, and Chromium/Firefox persistent-profile proof for two independent
+  titled documents across switch/restart plus group-bound UUID pinning.
+- R6 authenticated authorization proof: canonical creator-signed authorization-root
+  v1 binds document, initial participant role/active state, and participant identity-key
+  commitments; authenticated membership invite v3 binds the target identity key;
+  late joiners verify root + signed causal evidence instead of trusting plaintext group
+  membership, while established durable replicas reject conflicting bootstrap metadata.
+- Signed authorization-resolution v1 for frozen same-predecessor forks. Resolution
+  binds the exact fork and deterministic resulting ACL/head, requires unanimous active
+  pre-fork admin signatures with at least two independent admins, verifies approver
+  identity-key bindings, buffers safely out of order, and survives IndexedDB restart.
+- Replay-resistant authorization control payload v2 for membership/archive/delete:
+  signed document binding, monotonic authorization revision, 32-byte predecessor
+  commitment, SHA-256 authorization heads, durable accepted/pending/conflict history,
+  and adversarial TTL-expiry/restart/stale-admin/out-of-order/fork/snapshot coverage.
 - Production signal-cli v0.14.7 boundary coverage for daemon health, best-effort version probing,
   JSON-RPC response IDs/errors (including observed `id:null` command failures),
   documented send-result validation, account-aware automatic/manual/sync receive
@@ -65,6 +97,26 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
+- Public-facing web/Android branding and repository metadata now use **SignalCD Modern PoC**. Compatibility-sensitive `@e2e-col/*`, `E2E_COL_*`, `e2e-col:v1:`, storage, deep-link, and Android package identifiers remain unchanged in the 0.x line.
+- Workspace and Android app versions advance to `0.0.3` for the technical-preview release.
+
+- CRDT/local and remote snapshot persistence now preserves the already-durable
+  device-local metadata lane, preventing a stale open-session content write from
+  overwriting a successful local rename. Metadata edits emit no collaboration traffic
+  and remain independent of reader/archive/delete access restrictions.
+- Shared-group bootstrap no longer derives authorization-root creation permission
+  from plaintext `created_by`, group membership, or evidence-cache emptiness. Root
+  minting is restricted to an explicit local `CollaborativeClient.createDocument()`
+  operation; a normal fresh `openDocument()` without a verified root fails closed,
+  while an established verified replica may republish its pinned proof to heal an
+  empty evidence cache without accepting cache authority.
+- Access-control authorization ordering is now independent of transport order and
+  `ProtocolEnvelope.sequence`. Future controls may be durably buffered; stale or
+  superseded controls cannot roll access state backward; same-predecessor valid forks
+  freeze at their common predecessor instead of choosing a first-arrival winner.
+- Legacy membership/archive/delete control payload v1 is rejected fail-closed as not
+  replay-safe. Revision-0 persisted ACL state migrates to the v2 genesis predecessor,
+  while post-history legacy ACL state receives a deterministic semantic-state anchor.
 - Production sidecar startup now validates signal-cli health and visibility of
   configured groups before accepting browser connections; the undocumented
   version RPC is best-effort and method-not-found is non-fatal. Account linking,
@@ -92,6 +144,11 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
+- Android sidecar explicit-close handling now suppresses a late WebSocket `onOpen` callback at the listener/UI boundary as well as the internal connection state, preventing a closed connection from being presented as online.
+- Canonical empty Automerge bootstrap now pins its fixed actor's initial change to
+  timestamp 0. Independent browser contexts therefore derive identical bootstrap
+  history instead of occasionally producing conflicting actor/sequence-1 changes
+  when an invite snapshot is merged.
 - IndexedDB multi-store commits now explicitly abort on synchronous write-setup
   failures, preventing a snapshot from committing without its matching outbound
   record. Recovery snapshots also respect reader/archive/delete write restrictions.
@@ -101,9 +158,22 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - signal-cli endpoint URLs reject embedded credentials and default to loopback;
   default diagnostics expose neither account/group configuration nor JSON-RPC
   error data. Browser runtime configuration still contains no Signal credentials.
-- The bounded seen-message TTL is a restart/dedup mechanism, not a complete
-  authorization replay defense. Authenticated control frames older than the TTL
-  still require monotonic/causal authorization semantics in the R6 review.
+- The bounded seen-message TTL remains only a duplicate-suppression mechanism;
+  authorization replay safety now comes from the durable v2 predecessor chain and
+  authorization history. Replaying an old valid control after TTL pruning or restart
+  cannot make it current again.
+- R6 is complete within the authenticated-identity trust model: server/group
+  plaintext metadata cannot install ACL authority; fresh replicas verify the shared
+  signed root and causal chain, and valid forks remain frozen until the documented
+  multi-admin signed resolution proof succeeds. Single-admin forks stay fail-closed.
+- Root creation intent is local state, not bootstrap metadata: a group/toy server
+  that withholds the evidence cache or substitutes `created_by` can deny service but
+  cannot induce a joining `openDocument()` replica to mint a replacement root.
+- Remaining authorization deployment limits are explicit: first-contact trust still
+  depends on authenticated identity-key material, and a Byzantine evidence cache can
+  censor or replay an older valid signed prefix to a brand-new device without an
+  external freshness/transparency pin. It cannot forge proof or roll back an
+  established durable replica. R5 real-Signal evidence remains separately pending.
 - Browser identity/prekey private keys remain non-exportable and browser-local. The
   separate observer secret key stays inside the loopback toy daemon, rotates on
   reset or disable/enable, and is not returned through state/config/log/export APIs.
@@ -237,4 +307,4 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - Localhost is the default bind address for sidecar and signal-cli HTTP integration.
 - Remote sidecar binding and remote signal-cli endpoints require explicit opt-in; browser WebSocket origins default to loopback-only.
 
-The repository currently has no configured Git remote, so release links are intentionally not hard-coded here.
+At the time of the `0.0.1` release, the repository had no configured Git remote, so that release did not hard-code remote release links.

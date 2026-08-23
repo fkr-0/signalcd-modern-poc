@@ -107,7 +107,12 @@ async function createIdentity(): Promise<UserIdentity> {
     phoneNumber: '+15550000001',
     displayName: 'Observer test sender',
     identityKeyPair,
-    signedPrekeyPair,
+    signedPrekeyPair: {
+      ...signedPrekeyPair,
+      keyId: 'signed-prekey-current',
+      createdAt: 1_700_000_000_000
+    },
+    retiredSignedPrekeys: [],
     oneTimePrekeys: [],
     sessionToken: 'browser-session-token-must-not-leak',
     createdAt: 1_700_000_000_000

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "name": "SignalCD Modern PoC API",
+  "tsconfig": "tsconfig.api-docs.json",
+  "entryPoints": [
+    "packages/client/src/index.ts",
+    "packages/core/src/index.ts",
+    "packages/identity/src/index.ts",
+    "packages/protocol/src/index.ts",
+    "packages/storage/src/index.ts",
+    "packages/transport/src/index.ts"
+  ],
+  "out": "build/api-docs",
+  "readme": "none",
+  "githubPages": false,
+  "excludePrivate": true,
+  "excludeProtected": true,
+  "hideGenerator": false,
+  "skipErrorChecking": true
+}

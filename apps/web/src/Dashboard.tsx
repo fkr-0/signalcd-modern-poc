@@ -243,7 +243,7 @@ export function Dashboard(props: DashboardProps) {
     <main className="dashboard-shell">
       <header className="dashboard-header">
         <div>
-          <span className="dashboard-kicker">e2e-col inspector</span>
+          <span className="dashboard-kicker">SignalCD Modern PoC inspector</span>
           <strong>Sidecar dashboard</strong>
           <small>{props.transportLabel}</small>
         </div>

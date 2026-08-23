@@ -9,6 +9,7 @@ export const SIGNAL_CLI_HTTP_ENDPOINTS = {
 export const MOCK_GROUP_ENDPOINTS = {
   groups: '/api/v1/groups',
   groupTemplate: '/api/v1/groups/:group_id',
+  authorizationTemplate: '/api/v1/groups/:group_id/authorization',
   membersTemplate: '/api/v1/groups/:group_id/members',
   memberTemplate: '/api/v1/groups/:group_id/members/:phone_number',
   messages: '/api/v1/messages'
@@ -30,7 +31,8 @@ export const MOCK_IDENTITY_ENDPOINTS = {
   register: '/api/v1/identity/register',
   session: '/api/v1/identity/session',
   keyPrefix: '/api/v1/identity/keys/',
-  replenish: '/api/v1/identity/keys/replenish'
+  replenish: '/api/v1/identity/keys/replenish',
+  rotateSignedPrekey: '/api/v1/identity/keys/signed-prekey'
 } as const
 
 /**

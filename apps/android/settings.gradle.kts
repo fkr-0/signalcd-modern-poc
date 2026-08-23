@@ -14,7 +14,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "e2e-col-android"
+rootProject.name = "signalcd-modern-poc-android"
 
 include(":app")
 include(":core:model")

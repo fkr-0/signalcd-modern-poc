@@ -14,19 +14,22 @@
 # signal-cli at production time without changing browser application code.
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 0. PROGRESS TRACKING (updated 2026-08-20)
+# 0. PROGRESS TRACKING (updated 2026-08-22)
 # ─────────────────────────────────────────────────────────────────────────────
 
 progress:
-  last_audit: "2026-08-20"
-  overall: "P1-P5 DONE; P6-P7 PARTIAL"
+  last_audit: "2026-08-22"
+  overall: "P1-P5 DONE; P6-P7 PARTIAL; roadmap P2 local-library metadata complete"
 
   audit_gate:
-    pnpm_run_check: "PASS — version sync, typecheck, Biome lint/format, 93 Vitest files / 804 tests, production build"
+    pnpm_run_check: "PASS — version 0.0.2 synchronized across 10 workspaces, all typechecks, Biome 129 files, 110 Vitest files / 1134 tests pass + 1 opt-in real-Signal file/test skip, production build"
     playwright_e2e: >
-      NOT_REVERIFIED in this audit: the suite could not start because 127.0.0.1:18080
-      was already occupied by the separate live TETRA decode. The encrypted two-browser
-      Playwright proof exists in tests/e2e/web.spec.ts; no repository test assertion failed.
+      PASS on isolated E2E_COL_TEST_TOY_PORT=28094: Chromium 7/7 + Firefox 7/7 = 14/14.
+      Coverage includes local create -> title -> independent switch -> persistent-profile restart ->
+      restored titles/content -> group-bound UUID pinning, plus the encrypted invite/bootstrap,
+      archive/unarchive, convergence, queue replay, and durable-dedup R6 paths. Persistent-profile
+      startup uses the browser-restored page only after DOM startup so profile IndexedDB is not
+      raced by an immediate navigation.
 
   phases:
     P1_identity_foundation:
@@ -71,16 +74,16 @@ progress:
             tests/e2e/web.spec.ts contains an isolated two-browser test that exercises encrypted
             A->B and B->A convergence, duplicate/delay injection, server plaintext absence, and reload.
       verification_note: >
-        The Playwright proof now exists, closing the previous missing-test gap. Its current re-run
-        was environment-blocked by port 18080 being in use, so this audit does not claim a fresh
-        Playwright pass; the repository-wide pnpm run check gate itself is green.
+        The Playwright proof is current and green: the final isolated Chromium + Firefox run on
+        E2E_COL_TEST_TOY_PORT=28094 passed 14/14, including encrypted two-browser convergence and
+        the persistent-profile restart paths. R5 real-Signal evidence remains separately gated.
 
     P3_access_control:
       status: "DONE"
       deliverables:
         - item: "Membership/archive/delete payload codecs and signing preimages"
           status: done
-          evidence: "packages/protocol/src/access-control.ts; access-control.test.ts (21 tests) passes"
+          evidence: "packages/protocol/src/access-control.ts; access-control.test.ts (25 tests) passes"
         - item: "Durable access-control state management"
           status: done
           evidence: >
@@ -109,13 +112,18 @@ progress:
         - item: "Sync status UI"
           status: done
           evidence: >
-            CollaborativeWorkspace exposes session phase/transport state, pending outbound count,
-            Auto/Manual selection, and Sync now action.
-        - item: "Multi-document support and persistence"
+            CollaborativeWorkspace exposes session phase/transport state, queued-local outbound
+            depth, Auto/Manual selection, Sync now action, reconnect/restart replay progress,
+            checkpoint recovery, and fail-closed authorization-conflict state. Replay completion
+            is explicitly local-transport progress rather than peer acknowledgement.
+        - item: "Multi-document support, local titles, and persistence"
           status: done
           evidence: >
-            CollaborativeClient create/open/list APIs and web document library exist;
-            client.test.ts verifies independent sessions and persisted metadata.
+            CollaborativeClient create/open/list/updateDocumentMetadata APIs and the web Local library
+            create/switch/rename independent documents. Display titles are explicitly device-local metadata:
+            rename preserves document UUID, CRDT snapshot, authorization/ACL/outbound state and additive
+            metadata; IndexedDB metadata writes are atomic, content writes preserve the durable metadata lane,
+            and persistent-profile browser coverage proves title/content restore plus group-bound UUID pinning.
 
     P5_debug_tooling:
       status: "DONE"
@@ -237,19 +245,20 @@ progress:
         contract tests verify plaintext recovery and runtime enable/disable without exposing browser private keys.
 
   test_coverage:
-    last_pnpm_check: "PASS — 93 Vitest files / 804 tests"
+    last_pnpm_check: "PASS — 110 Vitest files / 1134 tests pass + 1 opt-in real-Signal file/test skip"
     packages/identity: "4 test files"
     packages/protocol: "2 test files"
     packages/transport: "4 test files"
     packages/storage: "3 source test files (including IndexedDB atomicity)"
-    packages/client: "3 source test files (including lifecycle and E2EE integration)"
+    packages/client: "4 source test files / 49 focused tests (client, authorization R6, lifecycle, E2EE integration)"
     packages/testing: "2 test files"
     apps/toy-signal-cli: "11 source test files"
     apps/sidecar: "2 test files"
     apps/web: "1 test file (inspector-events.test.ts)"
     playwright: >
-      tests/e2e/web.spec.ts exists with browser registration, reload persistence, isolated clients,
-      and encrypted two-browser convergence; current audit re-run was blocked before test execution by port 18080 contention.
+      tests/e2e/web.spec.ts: final isolated E2E_COL_TEST_TOY_PORT=28094 run passed Chromium 7/7 +
+      Firefox 7/7 = 14/14, including two local titled documents across persistent-profile restart,
+      group-bound UUID pinning, encrypted convergence, and persistent R6 queue/dedup recovery.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. DESIGN PRINCIPLES
@@ -356,21 +365,25 @@ identity:
   provider:
     location: "apps/toy-signal-cli"
     description: >
-      The mock Signal server acts as a simplified identity provider.
-      It generates and stores keypairs, assigns phone-number-style
-      identifiers, and issues session tokens. In production, this role
-      is filled by Signal's account/registration service.
+      The mock Signal server acts as a simplified public identity directory.
+      It assigns phone-number-style identifiers, stores browser-generated
+      public key material, tracks public prekey inventory, and issues session
+      tokens. Private key material never leaves the browser.
 
     registration:
       description: >
-        Browser clients register by calling a REST endpoint. The server
-        generates a Curve25519 identity keypair, assigns a phone-number
-        identifier from a mock namespace, and returns the public material
-        plus a session token.
+        Browser clients generate Ed25519 identity and X25519 prekey material,
+        then register only the public halves through a REST endpoint. The
+        provider assigns a phone-number identifier from a mock namespace and
+        returns the accepted public material plus a session token.
 
       endpoint: "POST /api/v1/identity/register"
       request:
-        display_name: "string, optional, 1-64 chars"
+        display_name: "string, 1-64 chars"
+        identity_key_public: "base64, 32 bytes"
+        signed_prekey_public: "base64, 32 bytes"
+        signed_prekey_signature: "base64, 64 bytes"
+        one_time_prekeys: "array of base64, 32 bytes each"
       response:
         user_id: "string, UUID"
         phone_number: "string, e.g. +1555000NNNN"
@@ -382,14 +395,12 @@ identity:
         created_at: "unix millis"
 
       behavior:
-        - Server generates identity keypair (Ed25519 or X25519)
-        - Server generates signed prekey pair
-        - Server generates batch of one-time prekey pairs
+        - Browser generates the Ed25519 identity keypair
+        - Browser generates the signed X25519 prekey pair
+        - Browser generates the one-time X25519 prekey pairs
         - Phone number assigned from +15550000001..+15550009999 range
-        - All private keys stored server-side in mock memory/file store
-        - Browser receives ONLY public key material + session token
-        - In debug/development mode, server optionally exposes private
-          keys via a separate authenticated debug endpoint (see §8)
+        - Provider validates key sizes and signed-prekey identity signature
+        - Provider stores public material only; private keys remain browser-owned
 
     key_distribution:
       description: >
@@ -404,7 +415,29 @@ identity:
       behavior:
         - Returns public key bundle for the target phone number
         - One-time prekey is consumed (removed from pool) on first retrieval
-        - Server replenishes one-time prekeys when pool falls below threshold
+        - Pool health is reported on session verification; the browser replenishes
+          when the provider count falls below five
+
+    session_maintenance:
+      endpoint: "GET /api/v1/identity/session"
+      response:
+        signed_prekey_public: "base64, current provider-advertised key"
+        signed_prekey_rotation_required: "boolean"
+        prekey_count: "number of unconsumed public one-time prekeys"
+      behavior:
+        - Toy provider requests signed-prekey rotation after seven days
+        - Browser fails closed if provider signed-prekey material matches neither
+          its durable current key nor a durable pending rotation
+
+    signed_prekey_rotation:
+      endpoint: "POST /api/v1/identity/keys/signed-prekey"
+      request:
+        signed_prekey_public: "base64, 32-byte X25519 public key"
+        signed_prekey_signature: "base64, Ed25519 identity signature"
+      behavior:
+        - Provider verifies the replacement under the existing identity key
+        - Provider echoes exact accepted public material and rotation timestamp
+        - Long-term identity_key_public is never replaced by this endpoint
 
   # 3.2 Browser identity client
   client:
@@ -431,6 +464,13 @@ identity:
             description: "Generated in browser, public part uploaded to server"
             public: "CryptoKey"
             private: "CryptoKey (non-exportable)"
+          retired_signed_prekeys:
+            description: >
+              Prior signed-prekey private pairs retained locally for delayed
+              ciphertext addressed by an existing recipient-key selector.
+          pending_signed_prekey:
+            description: >
+              Optional durable staging pair persisted before provider publication.
           session_token: "string, bearer token for server API calls"
           created_at: "number, unix millis"
 
@@ -471,9 +511,11 @@ identity:
 
       open_session:
         description: >
-          Load existing identity from IndexedDB storage. Verify session
-          token is still valid via server health check. Return
-          UserIdentity for use by ClientSDK.
+          Load existing identity from IndexedDB storage and verify the session.
+          Reconcile provider/current/pending signed-prekey material, perform a
+          provider-requested signed-prekey rotation, and replenish the one-time
+          public prekey pool when it falls below five. New private material is
+          persisted before publication so interrupted maintenance can resume.
 
       encrypt_envelope:
         description: >
@@ -523,8 +565,9 @@ identity:
         key_path: "key_id"
         description: >
           CryptoKey pairs stored via structured clone. IndexedDB supports
-          CryptoKey natively. Fields: key_id, type (identity|signed_pre|
-          one_time_pre|ephemeral), public, private, created_at.
+          CryptoKey natively. Fields include key_id, type (identity|signed_pre|
+          retired_signed_pre|pending_signed_pre|one_time_pre), public, private,
+          created_at, and one-time-prekey publication state.
       - name: "remote_identities"
         key_path: "user_id"
         description: "Cached public key bundles for known peers"
@@ -640,22 +683,109 @@ access_control:
       to be rejected before any state mutation.
 
     cross_device_consistency: >
-      Because membership state is derived from signed envelopes
-      delivered through the same broadcast channel as document edits,
-      all honest participants converge on the same access-control
-      state. This mirrors the CRDT convergence guarantee.
+      Broadcast delivery does not define authorization order. A creator-signed
+      authorization root binds the initial authority and authenticated identity-key
+      commitments. Replay-safe controls carry signed revision/predecessor proof,
+      authenticated invites additionally bind the target identity key, and replicas
+      authorize at the signed predecessor. Valid future descendants buffer durably;
+      same-predecessor forks freeze until a quorum-backed signed resolution advances
+      one deterministic authorization head.
+
+  authorization_ordering:
+    status: "COMPLETE_R6_AUTHENTICATED_IDENTITY_MODEL"
+    control_payload_version: "2; authenticated membership invite uses 3"
+    commitment: "SHA-256 over canonical domain-separated control signing bytes"
+    genesis_predecessor: "32 zero bytes for revision-0 state"
+    signed_fields:
+      - document_id
+      - revision
+      - predecessor
+      - actor_user_id
+      - timestamp
+      - kind_specific_action_fields
+    invariants:
+      - "revision MUST equal predecessor revision + 1"
+      - "actor MUST be an active admin at the signed predecessor state"
+      - "ProtocolEnvelope.sequence MUST NOT define authorization order"
+      - "stale/superseded controls MUST NOT roll access state backward after dedup TTL expiry"
+      - "delete is terminal for authorization successors"
+    out_of_order_policy: >
+      A valid control whose predecessor is not known yet is stored durably as
+      pending evidence and retried when that predecessor becomes known. It does
+      not mutate access state while pending.
+    bootstrap_root:
+      version: 1
+      commitment: "SHA-256 over canonical authorization-root signing bytes"
+      signed_by: "creator/admin Ed25519 identity key"
+      mint_authority: >
+        Root creation is authorized only by the explicit local
+        CollaborativeClient.createDocument() path. Shared-group open/bootstrap
+        cannot derive root-mint permission from created_by, membership, expected
+        head/root hints, or evidence-cache emptiness.
+      binds:
+        - document_id
+        - creator_user_id
+        - "sorted participant id/role/active tuples"
+        - "SHA-256 commitment to each participant Ed25519 identity key"
+      production_web_initial_acl: "creator-only; later participants require signed membership-v3 invite"
+      server_role: >
+        Group membership and /authorization are untrusted routing/evidence-cache
+        surfaces. They do not hold private identity keys and do not install plaintext
+        ACL authority. Fresh replicas verify root + chain from authenticated identity
+        material; established replicas reject cache root/head conflicts with durable
+        state and may republish their already-pinned root/head into an empty cache.
+    concurrency_policy: >
+      Two distinct valid controls with the same predecessor and revision form an
+      authorization fork. Once both are observed, access state freezes at their
+      common predecessor, the conflict control ids are sorted/persisted, and edits,
+      admin mutations, and snapshot publication fail closed. A resolution is accepted
+      only after the exact active pre-fork admin set (minimum two independent admins)
+      signs a proof binding the common predecessor, exact competing controls,
+      deterministic resulting ACL commitment, and next revision. Delete takes
+      deterministic precedence; otherwise the lexicographically smallest control
+      commitment is canonical. Arrival order/server preference never chooses authority.
+    resolution:
+      envelope_kind: "authorization-resolution"
+      payload_version: 1
+      quorum: "unanimous active admins at common predecessor; minimum 2"
+      identity_binding: "verified-root approvers must still match predecessor ACL key commitments"
+      out_of_order: "durably buffer proof until the exact fork evidence exists"
+      durable_restart: true
+      single_admin_fork: "remains fail-closed"
+    compatibility:
+      legacy_control_payload_v1: "reject fail-closed as not replay-safe"
+      persisted_revision_0: "explicit legacy-zero-genesis; not a verified shared root"
+      persisted_revision_gt_0: >
+        Explicit legacy-local-anchor over the existing semantic ACL; do not invent
+        missing predecessor history or silently relabel it as verified-root.
+    remaining_security_limits:
+      - "First-contact identity authenticity still depends on authenticated identity-key material"
+      - "A Byzantine evidence cache can censor/replay an older valid prefix to a brand-new device without external freshness/transparency"
+      - "R5 live two-account real-Signal evidence remains separately unavailable"
 
   storage:
     description: >
-      Access-control state is persisted alongside the document snapshot.
-      It is reconstructed from membership envelopes on recovery.
+      Access-control state and replay-security metadata are persisted in the
+      access_control record independently from CRDT snapshots and bounded seen
+      message dedup. Accepted control history stores the resulting ACL state;
+      future pending controls and fork/conflict evidence are retained as well.
     fields:
       document_id: "string, UUID"
       self_role: "reader | writer | admin"
       participants: "array of DocumentParticipant"
       archived: "boolean"
       deleted: "boolean"
-      revision: "number, incremented on each membership change"
+      revision: "positive monotonic authorization revision; 0 only at anchor/genesis"
+      authorization_root: "hex-encoded creator-signed shared root commitment when verified"
+      authorization_head: "hex-encoded 32-byte root/control/resolution commitment"
+      authorization_status: "active | conflict"
+      authorization_anchor_kind: "verified-root | legacy-zero-genesis | legacy-local-anchor"
+      authorization_root_proof: "encoded creator-signed root when verified-root"
+      authorization_history: "accepted control records with predecessor/revision/resulting ACL"
+      pending_authorization: "valid future controls waiting for their predecessor"
+      authorization_conflict: "same-predecessor fork evidence when present"
+      authorization_resolutions: "durable accepted fork-resolution records"
+      pending_authorization_resolutions: "resolution proofs waiting for exact fork evidence"
     store: "new IndexedDB object store 'access_control' in document DB"
 
   envelope_integration:
@@ -665,6 +795,9 @@ access_control:
     membership_payload_schema:
       type: "object"
       fields:
+        document_id: "UUID"
+        revision: "positive safe integer"
+        predecessor: "32-byte authorization commitment"
         action: "invite | remove | role_change"
         target_user_id: "UUID"
         role: "reader | writer | admin | null (for remove)"
@@ -674,6 +807,9 @@ access_control:
     archive_payload_schema:
       type: "object"
       fields:
+        document_id: "UUID"
+        revision: "positive safe integer"
+        predecessor: "32-byte authorization commitment"
         action: "archive | unarchive"
         actor_user_id: "UUID"
         timestamp: "unix millis"
@@ -681,6 +817,9 @@ access_control:
     delete_payload_schema:
       type: "object"
       fields:
+        document_id: "UUID"
+        revision: "positive safe integer"
+        predecessor: "32-byte authorization commitment"
         action: "delete"
         actor_user_id: "UUID"
         timestamp: "unix millis"
@@ -795,8 +934,13 @@ mock_signal_server:
     identity:
       - method: POST
         path: "/api/v1/identity/register"
-        description: "Register new user, generate keypair, assign phone number"
+        description: "Register browser-owned public identity/prekey material"
         auth: none
+
+      - method: GET
+        path: "/api/v1/identity/session"
+        description: "Verify session and report signed-prekey/pool maintenance state"
+        auth: "Bearer session_token"
 
       - method: GET
         path: "/api/v1/identity/keys/:phone_number"
@@ -806,6 +950,11 @@ mock_signal_server:
       - method: POST
         path: "/api/v1/identity/keys/replenish"
         description: "Upload new one-time prekeys"
+        auth: "Bearer session_token"
+
+      - method: POST
+        path: "/api/v1/identity/keys/signed-prekey"
+        description: "Rotate identity-signed X25519 signed prekey"
         auth: "Bearer session_token"
 
     groups:
@@ -1042,12 +1191,16 @@ ui:
   # 8.4 Sync control
   sync_control:
     description: >
-      Toolbar area showing sync mode and providing manual sync trigger.
+      Toolbar area showing sync mode and providing manual sync trigger plus explicit offline-first
+      state. Transport connectivity remains the connection-state authority.
     elements:
       - sync_mode_toggle: "Auto / Manual switch"
       - sync_button: "Flush pending (visible in manual mode)"
       - pending_count: "Number of unsent outbound envelopes"
       - transport_status: "Connected / Reconnecting / Offline"
+      - replay_progress: "Reconnect/restart durable records handed to local transport: completed / total"
+      - recovery_status: "Checkpoint/snapshot recovery is distinct from ordinary replay"
+      - conflict_status: "Fail-closed R6 authorization fork conflict"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 9. PACKAGE STRUCTURE

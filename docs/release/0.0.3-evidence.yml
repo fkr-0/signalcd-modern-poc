@@ -1,0 +1,115 @@
+release:
+  project: SignalCD Modern PoC
+  repository: fkr-0/signalcd-modern-poc
+  version: 0.0.3
+  tag: v0.0.3
+  channel: technical-preview
+  base_revision_before_release_commit: 0655dcb
+  protocol_envelope: v1
+  compatibility_namespaces_preserved:
+    - '@e2e-col/*'
+    - 'E2E_COL_*'
+    - 'e2e-col:v1:'
+    - 'dev.e2ecol.*'
+    - 'e2e-col://'
+
+scope:
+  included:
+    - accumulated verified P2/R6/offline/prekey lifecycle work from the inherited dirty tree
+    - Android Phase-1 sidecar proxy and late-onOpen listener race fix
+    - SignalCD Modern PoC public rename and provenance documentation
+    - documentation landing page, FAQ, workflow diagrams, TODO/help-wanted matrix
+    - real signal-cli validation experiment protocol and issue template
+    - reproducible PoC screenshots
+    - TypeDoc API export
+    - GitHub CI, Pages, and tagged artifact workflows
+  explicitly_not_claimed:
+    - real two-account Signal qualification
+    - production identity directory/freshness service
+    - authenticated long-term Ed25519 identity-key rebind
+    - Android shared-document production sends
+    - structured/rich documents
+    - production-ready security claim
+
+research_provenance:
+  paper: 'Christian Knabenhans, Zayd Maradni, Carmela Troncoso — End-to-End Encrypted Collaborative Documents, USENIX Security 2026'
+  paper_url: https://www.usenix.org/conference/usenixsecurity26/presentation/knabenhans
+  research_system: SignalCD
+  authors_prototype: https://github.com/spring-epfl/signal-collaborative-documents
+  pinned_upstream_commit: 2b96245a484ad651b74afead945478c40084728f
+  canonical_local_document: docs/RESEARCH-PROVENANCE.md
+
+verification:
+  workspace_check:
+    command: pnpm run check
+    result: pass
+    version_check: '0.0.3 / 10 workspaces synchronized'
+    biome_files: 136
+    vitest_files_passed: 114
+    vitest_files_skipped: 1
+    vitest_tests_passed: 1156
+    vitest_tests_skipped: 1
+    skipped_test: apps/sidecar/src/real-signal.smoke.test.ts
+    production_web_build: pass
+  browser_e2e:
+    command: 'CI=1 E2E_COL_TEST_TOY_PORT=28183 pnpm exec playwright test tests/e2e/web.spec.ts --project=chromium --project=firefox'
+    result: pass
+    tests: 14
+    browsers:
+      - chromium
+      - firefox
+  android_core:
+    command: 'JAVA_HOME=/usr/lib/jvm/java-17-openjdk GRADLE_USER_HOME=$PWD/apps/android/.gradle/release-user-home pnpm run android:check'
+    result: pass
+    test_classes: 15
+    tests: 79
+    failures: 0
+    skipped: 0
+  android_sidecar_race_regression:
+    command: 'apps/android/gradlew -p apps/android :core:sidecar:test --rerun-tasks'
+    result: pass
+    behavior: explicit close prevents a late WebSocket onOpen from notifying the listener/UI or restoring connected state
+  api_docs:
+    command: pnpm run api:docs
+    result: pass
+    output: build/api-docs
+    note: TypeDoc 0.28.20 currently lacks TypeScript 7 support, so documentation reflection uses a pinned TypeScript 5.9.3 parser with TypeDoc error checking disabled; pnpm run check remains the authoritative TypeScript 7.0.2 correctness gate.
+  poc_screenshots:
+    command: pnpm run docs:screenshots
+    result: pass
+    assets:
+      - path: docs/assets/poc-e2e-alice.png
+        sha256: 0ff9a4958714fc033cc1acf5fadd1890873ea9279a78ad27c3e969333d27b3b7
+      - path: docs/assets/poc-e2e-bob.png
+        sha256: 37ac75e1e2f1bb914054ebca572c340ba53d79152221b419c14595b114edf97e
+      - path: docs/assets/poc-e2e-inspector.png
+        sha256: 430377f372f9fbf20b91d32da66fe89079220e0f0508ce50d4c1b0acc4cb8000
+  workflow_lint:
+    command: actionlint .github/workflows/*.yml
+    result: pass
+  local_markdown_links:
+    result: pass
+  diff_check:
+    command: git diff --check
+    result: pass
+
+known_environment_limitations:
+  local_android_app_assemble:
+    status: not_used_as_release_evidence
+    reason: local /opt/android-sdk does not have accepted/available Android API 36 and Build Tools 36.0.0 provisioning; GitHub Actions installs these explicitly before assemble.
+  real_signal:
+    status: pending_external_validation
+    signal_cli_compatibility_reference: 0.14.7
+    experiment: docs/SIGNALCLI-EXPERIMENT.md
+
+publication_plan:
+  github_repository: https://github.com/fkr-0/signalcd-modern-poc
+  documentation: https://signalcd-poc.fkr.dev/
+  api_docs: https://signalcd-poc.fkr.dev/api/
+  release_assets:
+    - browser static build archive
+    - Android debug APK
+    - sidecar/protocol source archive
+    - generated API docs archive
+    - SHA256SUMS.txt
+  tag_policy: create v0.0.3 only after committed main passes GitHub CI

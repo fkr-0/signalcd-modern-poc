@@ -1,0 +1,65 @@
+name: Real signal-cli validation
+about: Report a sanitized two-account SignalCD Modern PoC experiment run
+title: "[real-signal] "
+labels:
+  - real-signal-validation
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing the missing real-Signal path. Please use synthetic document content and do not include phone numbers, Signal data directories, group secrets, tokens, private keys, or credential-bearing environment dumps. Follow `docs/SIGNALCLI-EXPERIMENT.md`.
+
+  - type: input
+    id: project_version
+    attributes:
+      label: Project version / Git revision
+      placeholder: "0.0.3 / commit SHA"
+    validations:
+      required: true
+
+  - type: input
+    id: signal_cli_version
+    attributes:
+      label: signal-cli version
+      placeholder: "0.14.7"
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Sanitized environment
+      description: OS/JVM/browser versions for both participants. Do not include account identifiers.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: results
+    attributes:
+      label: Experiment results
+      options:
+        - label: Signal text messaging worked A → B before project involvement
+        - label: Signal text messaging worked B → A before project involvement
+        - label: Both sidecars passed daemon/account/group startup checks
+        - label: Collaborative edit converged A → B
+        - label: Collaborative edit converged B → A
+        - label: Restart/offline queued edit replayed and converged
+        - label: No unexpected plaintext/private-key material appeared in sanitized sidecar diagnostics
+
+  - type: textarea
+    id: differences
+    attributes:
+      label: JSON-RPC / SSE compatibility differences
+      description: Note any response shape, error, method, SSE, account, or group behavior that differs from the repository compatibility profile.
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted evidence
+      description: Link or attach screenshots/log excerpts containing synthetic document text only. Describe any redaction performed.
+
+  - type: textarea
+    id: failure
+    attributes:
+      label: Failure details
+      description: If a step failed, identify the experiment step and whether the failure appears to be provisioning, signal-cli compatibility, sidecar, application E2EE, CRDT/protocol, or persistence/replay.

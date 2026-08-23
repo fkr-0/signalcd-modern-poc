@@ -1,0 +1,106 @@
+name: Release Artifacts
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to package
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.3.0
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - uses: android-actions/setup-android@v3
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Verify TypeScript workspace
+        run: pnpm run check
+
+      - name: Install browser E2E dependencies
+        run: pnpm exec playwright install --with-deps chromium firefox webkit
+
+      - name: Verify browser E2E
+        run: pnpm run test:e2e
+
+      - name: Generate API documentation
+        run: pnpm run api:docs
+
+      - name: Install Android SDK platform and tools
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+
+      - name: Verify Android core and build debug APK
+        run: |
+          pnpm run android:check
+          pnpm run android:assemble
+
+      - name: Package release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release
+          web="signalcd-modern-poc-web-${RELEASE_TAG}.tar.gz"
+          apk="signalcd-modern-poc-android-debug-${RELEASE_TAG}.apk"
+          sidecar="signalcd-modern-poc-sidecar-source-${RELEASE_TAG}.tar.gz"
+          api="signalcd-modern-poc-api-docs-${RELEASE_TAG}.tar.gz"
+
+          tar -C apps/web/dist -czf "dist/release/${web}" .
+          cp apps/android/app/build/outputs/apk/debug/app-debug.apk "dist/release/${apk}"
+          git archive --format=tar.gz -o "dist/release/${sidecar}" HEAD apps/sidecar packages/protocol package.json pnpm-lock.yaml
+          tar -C build/api-docs -czf "dist/release/${api}" .
+
+          (
+            cd dist/release
+            sha256sum "${web}" "${apk}" "${sidecar}" "${api}" > SHA256SUMS.txt
+          )
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: signalcd-modern-poc-${{ env.RELEASE_TAG }}
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release create "${RELEASE_TAG}" \
+              --title "SignalCD Modern PoC ${RELEASE_TAG}" \
+              --generate-notes
+          fi
+          gh release upload "${RELEASE_TAG}" dist/release/* --clobber

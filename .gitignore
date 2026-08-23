@@ -20,4 +20,5 @@ test-results/
 .nyc_output/
 .DS_Store
 .ws-bridge/
+.wsbridge/
 pnpm-debug.log

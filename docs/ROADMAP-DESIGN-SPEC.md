@@ -104,10 +104,19 @@ Signal-specific code remains outside this package.
 Responsibilities:
 
 - IndexedDB persistence for local document state;
+- device-local application metadata such as display titles;
 - durable outbound queue;
 - snapshots/checkpoints;
 - compaction metadata;
 - recovery after browser restart or crash.
+
+Document display metadata is a separate local-storage authority lane. It is not CRDT
+content, access-control state, or wire payload. Metadata-only updates MUST preserve
+snapshot bytes, outbound/access/authorization stores, document UUID, and group
+binding. Conversely CRDT/local and remote snapshot persistence MUST preserve the
+already-durable metadata record rather than treating an open session's cached copy as
+authoritative. This prevents a stale content write from racing and undoing a local
+rename.
 
 ### 3.5 `apps/sidecar`
 
@@ -125,6 +134,8 @@ Responsibilities:
 
 - document/editor UX;
 - connection/offline/sync indicators;
+- durable outbound queue depth plus reconnect/restart replay progress, without claiming peer ack;
+- explicit fail-closed authorization-conflict and checkpoint-recovery indicators;
 - membership/access UI;
 - local-first persistence integration;
 - no Signal credentials or daemon management.
@@ -283,11 +294,99 @@ Exit criteria:
 
 ### R6 — paper-level access semantics
 
-**Status: partial.** Signed membership/archive/delete enforcement, role checks,
-durable access state, and replay dedup are implemented. The remaining security
-boundary is monotonic/causal authorization: bounded seen-message TTL alone cannot
-prevent a sufficiently old authenticated control frame from becoming effective
-again after its dedup entry expires.
+**Status: complete for the authenticated-identity model (2026-08-21).** R6 now
+covers a shared creator-signed authorization root, replay-safe causal controls, and
+explicit signed fork reconciliation, with durable restart and Chromium/Firefox
+evidence. The outer `ProtocolEnvelope` remains v1.
+
+Bootstrap trust model:
+
+- canonical authorization-root v1 binds document id, creator identity, sorted
+  participant ids/roles/active state, and a 32-byte SHA-256 commitment to each
+  participant's authenticated Ed25519 identity key; the creator MUST be an active
+  initial admin and signs the canonical root;
+- production browser creation installs a creator-only root only from an explicit
+  local `CollaborativeClient.createDocument()` operation. A shared-group
+  `openDocument()` MUST NOT mint a root from `created_by`, membership, or cache
+  emptiness. Group membership is routing/discovery metadata and cannot install ACL
+  authority; later participants enter through signed membership-v3 invites that bind
+  the target identity key;
+- a fresh replica verifies the root signature plus every identity-key commitment
+  before installing revision-0 authority. A late joiner replays root + signed
+  control/resolution evidence to the supplied current head; CRDT bootstrap is a
+  separate concern;
+- an established replica MUST NOT let bootstrap/group metadata replace a durable
+  root/head. Conflicting root/head hints fail closed; an established replica MAY
+  republish its already-verified durable root/head into an empty evidence cache;
+- the toy group authorization endpoint is an untrusted evidence cache. Private
+  identity keys never move into server state. Its root/head fields are evidence
+  selection/freshness hints, not signatures or plaintext ACL authority.
+
+Authorization ordering is independent from `ProtocolEnvelope.sequence`. Control
+payload v2 binds document id, positive authorization revision, predecessor, actor,
+timestamp, and semantic fields; authenticated invite payload v3 additionally binds
+the target identity-key commitment. Accepted control history and pending/conflict
+state survive dedup expiry, restart, snapshots, and CRDT checkpoint compaction.
+
+Concurrency and reconciliation policy:
+
+- authorize a control against the ACL at its signed predecessor; on a verified root,
+  re-check the actor's current authenticated key against the predecessor ACL's bound
+  identity-key commitment;
+- durably buffer a valid future control until its predecessor becomes known;
+- two valid same-predecessor/revision controls freeze at the common predecessor;
+- fork-resolution v1 binds document id, common predecessor, fork revision, exact
+  sorted competing control commitments, deterministic chosen branch/resulting ACL
+  commitment, and resolution revision. The resolution commitment becomes the new
+  authorization head;
+- resolution requires the exact unanimous set of active admins at the pre-fork
+  predecessor and at least two independent admins. Every approval is signature- and
+  identity-key-binding-checked. A one-admin fork remains frozen fail-closed;
+- delete branches take deterministic precedence; otherwise the lexicographically
+  smallest competing control commitment is canonical. Arrival order, server choice,
+  and first-writer rules are never authority;
+- resolution may arrive before branch controls and is durably buffered until the
+  exact fork evidence exists. Resolved branches remain superseded after restart and
+  seen-message TTL expiry; delete remains terminal.
+
+Compatibility is explicit and fail-closed. Legacy control payload v1 is rejected.
+Persisted revision-0 and revision>0 state become `legacy-zero-genesis` and
+`legacy-local-anchor` respectively; neither is silently promoted to `verified-root`.
+
+R6 does not solve first-contact identity-directory compromise or freshness of an
+untrusted bootstrap cache. A brand-new device can be censored or shown an older
+valid signed prefix unless an external pin/transparency mechanism proves a newer
+head; an established durable replica cannot be rolled back. R5 live real-Signal
+evidence remains a separate, unchanged deployment gate.
+
+#### P2 §2.4 — key-material lifecycle
+
+**Status: prekey lifecycle implemented (2026-08-22).** Session establishment is the
+maintenance boundary. The identity provider returns its currently advertised signed
+prekey, a rotation-due flag, and remaining one-time-prekey count. The browser MUST
+first reconcile that signed-prekey public material with either its durable current
+key or an already-staged pending key; any third value fails closed.
+
+Signed-prekey rotation uses the existing long-term Ed25519 identity only as the
+authenticator. The browser generates a non-exportable X25519 pair, persists it as a
+pending signed prekey, signs its public half with the unchanged Ed25519 private key,
+publishes it, verifies the provider echoed the exact material, then atomically makes
+it current and archives the previous private pair. Retired pairs remain selectable
+by the existing encrypted-envelope recipient-key fingerprint so delayed ciphertext
+does not become undecryptable merely because a maintenance rotation occurred. The
+toy provider requests this transition after seven days.
+
+One-time prekey replenishment follows the same durability ordering. When provider
+inventory falls below five, the browser stages enough X25519 pairs to target ten,
+publishes their public halves, then records them as published. A crash after provider
+acceptance but before that final write retries the same staged public keys; provider
+deduplication makes the retry idempotent.
+
+This lifecycle MUST NOT silently replace the Ed25519 identity key. Verified R6 roots,
+membership-v3 invitations, controls, and fork approvals bind that key. Identity-key
+rotation therefore remains a separate §2.4 gap until an authenticated rebind and
+re-verification transition can preserve historical signature verification and update
+authority commitments explicitly rather than by directory substitution.
 
 Deliverables:
 
@@ -302,6 +401,13 @@ Exit criteria:
 - participant list changes are authenticated;
 - unauthorized edit frames are rejected;
 - archive/delete behavior matches documented model.
+- stale authenticated controls remain rejected after dedup expiry and restart;
+- authorization ordering does not depend on transport order or envelope sequence;
+- a shared signed bootstrap root is independently verifiable across devices;
+- a fork stays frozen until a quorum-backed signed resolution is valid, then the
+  resolution converges and survives durable restart;
+- Chromium and Firefox verify the same root/head through encrypted invite + lifecycle
+  control without trusting plaintext group membership as ACL authority.
 
 ### R7 — production editor
 
@@ -439,9 +545,12 @@ depends_on:
 
 ### Track F — web UX
 
-**Status: initial integration implemented.** The web runtime now consumes core,
-protocol, transport, and IndexedDB storage through `BrowserReplicaSession`.
-Richer document-list/access/lifecycle UX remains part of the product phases.
+**Status: initial integration plus P2 local-library metadata complete.** The web
+runtime consumes the framework-neutral client facade and IndexedDB storage. The Local
+library can create/switch independent documents and edit a device-local display title.
+Group-bound workspaces keep unrelated document switching/rename disabled so metadata
+UX cannot retarget a collaboration group to another UUID. Richer organization and
+offline-first UX remain later product work.
 
 ```yaml
 paths:

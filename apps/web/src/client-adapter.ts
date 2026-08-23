@@ -1,5 +1,7 @@
-import type { ClientIdentityAdapter } from '@e2e-col/client'
+import type { AuthorizationEvidencePublish, ClientIdentityAdapter } from '@e2e-col/client'
 import {
+  base64ToBytes,
+  bytesToBase64,
   type DebugObserverCapability,
   encryptProtocolEnvelopeForDebugObserver,
   type IdentityClient,
@@ -22,6 +24,54 @@ export interface CollaborationGroupMemberView {
   readonly display_name: string
   readonly role: DocumentRole
   readonly joined_at?: number
+}
+
+async function getAuthorizationEvidence(options: {
+  readonly baseUrl: string
+  readonly groupId: string
+  readonly identity: UserIdentity
+}): Promise<CollaborationAuthorizationEvidenceView> {
+  return requestJson<CollaborationAuthorizationEvidenceView>(
+    `${options.baseUrl}/api/v1/groups/${encodeURIComponent(options.groupId)}/authorization`,
+    { headers: authHeaders(options.identity) }
+  )
+}
+
+async function publishAuthorizationEvidence(options: {
+  readonly baseUrl: string
+  readonly groupId: string
+  readonly identity: UserIdentity
+  readonly evidence: AuthorizationEvidencePublish
+}): Promise<void> {
+  await requestJson<CollaborationAuthorizationEvidenceView>(
+    `${options.baseUrl}/api/v1/groups/${encodeURIComponent(options.groupId)}/authorization`,
+    {
+      method: 'POST',
+      headers: {
+        ...authHeaders(options.identity),
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        version: 1,
+        root_commitment: options.evidence.rootCommitment,
+        head_commitment: options.evidence.headCommitment,
+        roots: options.evidence.root ? [bytesToBase64(options.evidence.root)] : [],
+        controls: options.evidence.controls.map((entry) => ({
+          kind: entry.kind,
+          sender_id: entry.senderId,
+          message_id: entry.messageId,
+          payload_base64: bytesToBase64(entry.payload),
+          received_at: entry.receivedAt
+        })),
+        resolutions: options.evidence.resolutions.map((entry) => ({
+          sender_id: entry.senderId,
+          message_id: entry.messageId,
+          payload_base64: bytesToBase64(entry.payload),
+          received_at: entry.receivedAt
+        }))
+      })
+    }
+  )
 }
 
 async function createDebugObserverCopy(
@@ -91,7 +141,28 @@ export interface CollaborationGroupView {
   readonly group_id: string
   readonly document_id: string
   readonly name: string
+  readonly created_by: string
   readonly members: readonly CollaborationGroupMemberView[]
+}
+
+interface CollaborationAuthorizationEvidenceView {
+  readonly version: 1
+  readonly expected_root: string | null
+  readonly expected_head: string | null
+  readonly roots: readonly string[]
+  readonly controls: readonly {
+    readonly kind: 'membership' | 'archive' | 'delete'
+    readonly sender_id: string
+    readonly message_id: string
+    readonly payload_base64: string
+    readonly received_at: number
+  }[]
+  readonly resolutions: readonly {
+    readonly sender_id: string
+    readonly message_id: string
+    readonly payload_base64: string
+    readonly received_at: number
+  }[]
 }
 
 interface BrowserIdentityAdapterOptions {
@@ -116,6 +187,23 @@ export function createBrowserIdentityAdapter(
     })
     for (const member of value.members) membersByUser.set(member.user_id, member)
     return value
+  }
+
+  async function publicIdentityKey(participantId: string): Promise<CryptoKey> {
+    if (participantId === options.identity.userId) return options.identity.identityKeyPair.publicKey
+    let member = membersByUser.get(participantId)
+    if (!member) {
+      await group()
+      member = membersByUser.get(participantId)
+    }
+    if (!member) throw new Error(`unknown collaboration participant ${participantId}`)
+    const remote = await options.identityClient.fetchRemoteIdentity(
+      member.phone_number,
+      options.identity
+    )
+    if (remote.userId !== participantId)
+      throw new Error(`identity lookup changed participant binding for ${participantId}`)
+    return remote.identityKeyPublic
   }
 
   const base: ClientIdentityAdapter = {
@@ -161,6 +249,11 @@ export function createBrowserIdentityAdapter(
         participantId: remote.userId,
         ...(remote.displayName === undefined ? {} : { displayName: remote.displayName })
       }
+    },
+    async identityKeyCommitment(participantId) {
+      const key = await publicIdentityKey(participantId)
+      const raw = await crypto.subtle.exportKey('raw', key)
+      return new Uint8Array(await crypto.subtle.digest('SHA-256', raw))
     }
   }
 
@@ -168,6 +261,53 @@ export function createBrowserIdentityAdapter(
 
   return {
     ...base,
+    async bootstrapAuthorization(context) {
+      const current = await group()
+      if (current.document_id !== context.documentId)
+        throw new Error('collaboration group is bound to a different document')
+      const evidence = await getAuthorizationEvidence({
+        baseUrl: options.baseUrl,
+        groupId: options.groupId!,
+        identity: options.identity
+      })
+      return {
+        // Root creation authority is intentionally NOT derived from `created_by`
+        // or any other group response. DocumentSession permits minting a root only
+        // for an explicit local createDocument() operation. Server-supplied
+        // membership remains routing metadata; the shared root starts creator-only
+        // and everyone else arrives through a signed membership control.
+        initialParticipants: [
+          { participantId: options.identity.userId, role: 'admin' as const, active: true }
+        ],
+        ...(evidence.expected_root === null ? {} : { expectedRoot: evidence.expected_root }),
+        ...(evidence.expected_head === null ? {} : { expectedHead: evidence.expected_head }),
+        roots: evidence.roots.map(base64ToBytes),
+        controls: evidence.controls.map((entry) => ({
+          kind: entry.kind,
+          senderId: entry.sender_id,
+          messageId: entry.message_id,
+          payload: base64ToBytes(entry.payload_base64),
+          receivedAt: entry.received_at
+        })),
+        resolutions: evidence.resolutions.map((entry) => ({
+          senderId: entry.sender_id,
+          messageId: entry.message_id,
+          payload: base64ToBytes(entry.payload_base64),
+          receivedAt: entry.received_at
+        }))
+      }
+    },
+    async publishAuthorizationEvidence(context, evidence) {
+      const current = await group()
+      if (current.document_id !== context.documentId)
+        throw new Error('collaboration group is bound to a different document')
+      await publishAuthorizationEvidence({
+        baseUrl: options.baseUrl,
+        groupId: options.groupId!,
+        identity: options.identity,
+        evidence
+      })
+    },
     async bootstrapAccess(context) {
       const current = await group()
       if (current.document_id !== context.documentId)

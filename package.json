@@ -1,9 +1,9 @@
 {
-  "name": "e2e-col",
-  "version": "0.0.2",
+  "name": "signalcd-modern-poc",
+  "version": "0.0.3",
   "private": true,
   "packageManager": "pnpm@11.3.0",
-  "description": "Modern E2EE collaborative-document implementation inspired by SignalCD.",
+  "description": "Independent modern proof-of-concept implementation of the SignalCD construction from the USENIX Security 2026 E2EE-CD paper.",
   "type": "module",
   "scripts": {
     "dev": "pnpm --filter @e2e-col/web dev",
@@ -23,6 +23,8 @@
     "test:toy-signal-cli": "vitest run apps/toy-signal-cli",
     "android:check": "apps/android/gradlew -p apps/android :core:model:test :core:protocol:test :core:sidecar:test :core:identity:test :core:storage:test :core:session:test",
     "android:assemble": "apps/android/gradlew -p apps/android :app:assembleDebug",
+    "api:docs": "pnpm dlx --package=typedoc@0.28.20 --package=typescript@5.9.3 typedoc --options typedoc.json",
+    "docs:screenshots": "bash scripts/capture-poc-screenshots.sh",
     "demo:signal": "pnpm --filter @e2e-col/toy-signal-cli dev",
     "version:check": "node scripts/check-version.js",
     "check": "pnpm run version:check && pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run test && pnpm run build",

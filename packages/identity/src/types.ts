@@ -11,6 +11,13 @@ export interface IdentityRecipient {
 export interface OneTimePrekey extends IdentityKeyPair {
   readonly keyId: string
   readonly createdAt: number
+  /** Set only after the provider has accepted this public prekey. */
+  readonly publishedAt?: number
+}
+
+export interface SignedPrekey extends IdentityKeyPair {
+  readonly keyId: string
+  readonly createdAt: number
 }
 
 export interface UserIdentity {
@@ -18,7 +25,11 @@ export interface UserIdentity {
   readonly phoneNumber: string
   readonly displayName: string
   readonly identityKeyPair: IdentityKeyPair
-  readonly signedPrekeyPair: IdentityKeyPair
+  readonly signedPrekeyPair: SignedPrekey
+  /** Retained so delayed ciphertext addressed to an older selector remains decryptable. */
+  readonly retiredSignedPrekeys: readonly SignedPrekey[]
+  /** Crash-recovery staging slot; never advertised until provider rotation succeeds. */
+  readonly pendingSignedPrekey?: SignedPrekey
   readonly oneTimePrekeys: readonly OneTimePrekey[]
   readonly sessionToken: string
   readonly createdAt: number
@@ -59,7 +70,19 @@ export interface IdentitySessionClaim {
   readonly userId: string
   readonly phoneNumber: string
   readonly displayName: string
+  readonly signedPrekeyPublic: string
+  readonly signedPrekeyRotationRequired: boolean
+  readonly prekeyCount: number
   readonly createdAt: number
+}
+
+export interface SignedPrekeyPublicMaterial {
+  readonly signedPrekeyPublic: string
+  readonly signedPrekeySignature: string
+}
+
+export interface SignedPrekeyRotationClaim extends SignedPrekeyPublicMaterial {
+  readonly rotatedAt: number
 }
 
 export interface RemoteIdentityBundle {
@@ -78,6 +101,10 @@ export interface IdentityProvider {
   verifySession(sessionToken: string): Promise<IdentitySessionClaim>
   lookupKeys(phoneNumber: string, sessionToken: string): Promise<RemoteIdentityBundle>
   replenishPrekeys(sessionToken: string, oneTimePrekeys: readonly string[]): Promise<number>
+  rotateSignedPrekey(
+    sessionToken: string,
+    material: SignedPrekeyPublicMaterial
+  ): Promise<SignedPrekeyRotationClaim>
 }
 
 export interface IdentityStorage {

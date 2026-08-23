@@ -1,7 +1,7 @@
 # Android integration
 
-Status: **scaffolded / protocol-compatible, CRDT runtime integration pending**  
-Date: **2026-08-20**
+Status: **P3 Phase-1 sidecar proxy complete / CRDT UI and native E2EE pending**
+Date: **2026-08-22**
 
 This document is the implementation contract for the Android application in `apps/android`. The Android client is intentionally a native Kotlin application, not an embedded browser and not a second TypeScript runtime. It shares the same e2e-col wire protocol and sidecar contract through executable cross-language fixtures.
 
@@ -72,11 +72,18 @@ There is **no bearer-token first frame in this sidecar protocol**. That authenti
 
 The Android `core:sidecar` module therefore:
 
+- accepts WebSocket endpoint schemes only (`ws://` or `wss://`);
 - appends exactly one `documentId` query parameter;
 - sends and receives binary frames only;
 - defaults to `localhost`, `127.0.0.1`, or `::1`;
 - requires an explicit `allowRemote=true` opt-in for any non-loopback endpoint;
-- sends no Authorization header unless a future sidecar contract explicitly adds one.
+- requires `wss://` even after that remote opt-in;
+- rejects URL credentials rather than allowing implicit HTTP/WebSocket authentication;
+- sends no Authorization header unless a future sidecar contract explicitly adds one;
+- reports `SessionTransport.isConnected` from the actual WebSocket open/closed/failure lifecycle instead of assuming the adapter is online;
+- maps only sidecar close code `4409` to explicit history-risk recovery evidence. Ordinary `1011`, restart, and socket-failure paths remain ordinary replayable transport failures, matching the browser transport contract.
+
+This completes the P3 Phase-1 **proxy transport** boundary. It deliberately does not make the current Compose text field collaborative: Android does not yet implement the recipient-bound encrypted `E2EE` wrapper, so emitting native CRDT document material through the production sidecar at this stage would cross the repository's E2EE boundary. Phase 1 therefore proves and hardens the proxy seam without introducing an Android private-key ownership model or weakening the browser-owned/private-key guarantees.
 
 ### Development from an emulator or physical device
 
@@ -260,6 +267,9 @@ The main `ci.yml` workflow also includes an Android job that runs `android:check
 - [x] Compose/ViewModel/StateFlow shell
 - [x] validated custom join-link parser
 - [x] loopback-first OkHttp sidecar transport
+- [x] fail-closed sidecar endpoint policy (`ws(s)` only, loopback default, remote `wss` opt-in, no URL credentials)
+- [x] truthful sidecar connection state and browser-parity `4409` history-risk recovery signaling
+- [x] deterministic native binary-frame/lifecycle proxy tests
 - [x] native ProtocolEnvelope v1 codec
 - [x] byte-for-byte TypeScript/Kotlin golden fixture
 - [x] Android API 36 assembly verified in a provisioned SDK environment

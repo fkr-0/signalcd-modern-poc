@@ -3,13 +3,61 @@ import type {
   DocumentAccessState,
   DocumentParticipant,
   DocumentRole,
+  ForkResolutionApproval,
   ProtocolEnvelope
 } from '@e2e-col/protocol'
-import type { DocumentMetadata, DurableCollaborativeStorage } from '@e2e-col/storage'
+import type {
+  AuthorizationControlKind,
+  DocumentMetadata,
+  DurableCollaborativeStorage
+} from '@e2e-col/storage'
 import type { ObservableCollaborativeTransport, TransportConnectionState } from '@e2e-col/transport'
 
 export interface TransportContext {
   readonly documentId: string
+}
+
+export interface AuthorizationBootstrapControlEvidence {
+  readonly kind: AuthorizationControlKind
+  readonly senderId: string
+  readonly messageId: string
+  readonly payload: Uint8Array
+  readonly receivedAt: number
+}
+
+export interface AuthorizationBootstrapResolutionEvidence {
+  readonly senderId: string
+  readonly messageId: string
+  readonly payload: Uint8Array
+  readonly receivedAt: number
+}
+
+/**
+ * Untrusted bootstrap evidence. The client verifies the selected root,
+ * identity-key commitments, every control signature/predecessor and every
+ * resolution proof before installing authority.
+ */
+export interface AuthorizationBootstrapMaterial {
+  /**
+   * Initial authority requested for an explicit local create operation. The
+   * session only consumes this field while handling `createDocument()`; a
+   * fresh `openDocument()` MUST NOT mint authority from bootstrap metadata.
+   * Adapters MUST NOT populate this from plaintext server/group membership.
+   */
+  readonly initialParticipants?: readonly DocumentParticipant[]
+  readonly expectedRoot?: string
+  readonly expectedHead?: string
+  readonly roots: readonly Uint8Array[]
+  readonly controls: readonly AuthorizationBootstrapControlEvidence[]
+  readonly resolutions: readonly AuthorizationBootstrapResolutionEvidence[]
+}
+
+export interface AuthorizationEvidencePublish {
+  readonly rootCommitment: string
+  readonly headCommitment: string
+  readonly root?: Uint8Array
+  readonly controls: readonly AuthorizationBootstrapControlEvidence[]
+  readonly resolutions: readonly AuthorizationBootstrapResolutionEvidence[]
 }
 
 export type TransportFactory = (context: TransportContext) => ObservableCollaborativeTransport
@@ -50,6 +98,15 @@ export interface ClientIdentityAdapter {
   signControl(bytes: Uint8Array): Promise<Uint8Array>
   verifyControl(actorUserId: string, bytes: Uint8Array, signature: Uint8Array): Promise<boolean>
   resolveParticipant(phoneNumber: string, role: DocumentRole): Promise<ResolvedParticipant>
+  /** SHA-256 commitment to an independently fetched/locally held Ed25519 identity key. */
+  identityKeyCommitment?(participantId: string): Promise<Uint8Array>
+  bootstrapAuthorization?(
+    context: Omit<IdentityEnvelopeContext, 'participants'>
+  ): Promise<AuthorizationBootstrapMaterial>
+  publishAuthorizationEvidence?(
+    context: Omit<IdentityEnvelopeContext, 'participants'>,
+    evidence: AuthorizationEvidencePublish
+  ): Promise<void>
   encodeEnvelope?(envelope: ProtocolEnvelope, context: IdentityEnvelopeContext): Promise<Uint8Array>
   decodeEnvelope?(wire: Uint8Array, context: IdentityEnvelopeContext): Promise<ProtocolEnvelope>
   bootstrapAccess?(
@@ -61,6 +118,14 @@ export interface CreateDocumentOptions {
   readonly documentId?: string
   readonly initialText?: string
   readonly metadata?: DocumentMetadata
+}
+
+/** Maximum normalized local display-title length. */
+export const MAX_DOCUMENT_TITLE_LENGTH = 200
+
+export interface UpdateDocumentMetadataOptions {
+  /** null or an empty/whitespace-only string clears the local display title. */
+  readonly title: string | null
 }
 
 export interface CollaborativeClientOptions {
@@ -111,10 +176,22 @@ export interface ClientError {
   readonly cause?: unknown
 }
 
+export interface OutboundReplayProgress {
+  /** Durable records in the reconnect/restart replay batch. */
+  readonly total: number
+  /** Records successfully handed to the local transport in this batch. */
+  readonly completed: number
+  /** True while the client is actively handing this batch to the transport. */
+  readonly active: boolean
+}
+
 export interface SessionStatus {
   readonly phase: SessionPhase
   readonly transport: TransportConnectionState
+  /** Durable records that have never yet been successfully handed to the transport. */
   readonly pendingOutbound: number
+  /** Local replay progress only; completion is not remote acknowledgement. */
+  readonly replay?: OutboundReplayProgress
   readonly recoveryRequired: boolean
   readonly lastReceivedAt?: number
   readonly lastSentAt?: number
@@ -141,4 +218,8 @@ export interface DocumentSessionCommands {
   archive(): Promise<void>
   unarchive(): Promise<void>
   deleteForGroup(): Promise<void>
+  /** Sign the deterministic currently-frozen fork-resolution proposal. */
+  approveForkResolution(chosenControlId: string): Promise<ForkResolutionApproval>
+  /** Publish a resolution only when the complete pre-fork admin quorum approved it. */
+  resolveFork(chosenControlId: string, approvals: readonly ForkResolutionApproval[]): Promise<void>
 }

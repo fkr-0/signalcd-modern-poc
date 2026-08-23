@@ -4,9 +4,13 @@ type DocumentState = { text: string }
 
 const BOOTSTRAP_ACTOR = '00000000000000000000000000000001'
 const EMPTY_DOCUMENT = Automerge.save(
-  Automerge.change(Automerge.init<DocumentState>({ actor: BOOTSTRAP_ACTOR }), (draft) => {
-    draft.text = ''
-  })
+  Automerge.change(
+    Automerge.init<DocumentState>({ actor: BOOTSTRAP_ACTOR }),
+    { time: 0 },
+    (draft) => {
+      draft.text = ''
+    }
+  )
 )
 
 export type DocumentChange = Uint8Array

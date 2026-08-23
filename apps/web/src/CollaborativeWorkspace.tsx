@@ -3,6 +3,7 @@ import {
   type DocumentSession,
   type DocumentSessionEvent,
   type DocumentSummary,
+  MAX_DOCUMENT_TITLE_LENGTH,
   type SessionStatus,
   type SyncMode
 } from '@e2e-col/client'
@@ -24,6 +25,7 @@ import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } fro
 import { addGroupMember, createBrowserIdentityAdapter } from './client-adapter'
 import { Dashboard } from './Dashboard'
 import { InspectorEventStore, instrumentTransportFactory } from './inspector-events'
+import { syncPresentation } from './offline-status'
 import { SyncLogPanel } from './SyncLogPanel'
 
 const defaultDocumentId = '11111111-1111-4111-8111-111111111111'
@@ -64,6 +66,9 @@ export function CollaborativeWorkspace({
   const [sharePhone, setSharePhone] = useState('')
   const [shareRole, setShareRole] = useState<DocumentRole>('writer')
   const [sharing, setSharing] = useState(false)
+  const [renameDocument, setRenameDocument] = useState<DocumentSummary>()
+  const [renameTitle, setRenameTitle] = useState('')
+  const [renaming, setRenaming] = useState(false)
   const [dashboardTransport, setDashboardTransport] = useState<ObservableCollaborativeTransport>()
   const syncLogClient = useMemo(() => new SyncLogClient({ baseUrl: identityServerUrl }), [])
 
@@ -75,7 +80,12 @@ export function CollaborativeWorkspace({
     if (event.type === 'document') setText(event.view.text)
     else if (event.type === 'status') setStatus(event.status)
     else if (event.type === 'access') setAccess(event.access)
-    else setError(event.error.message)
+    else {
+      const cause = event.error.cause
+      setError(
+        cause instanceof Error ? `${event.error.message}: ${cause.message}` : event.error.message
+      )
+    }
   }, [])
 
   const refreshDocuments = useCallback(async (client?: CollaborativeClient): Promise<void> => {
@@ -184,6 +194,44 @@ export function CollaborativeWorkspace({
     setError(undefined)
     try {
       attachSession(await client.openDocument(documentId))
+    } catch (cause) {
+      showError(cause)
+    }
+  }
+
+  function beginRename(document: DocumentSummary): void {
+    const unavailable = Boolean(binding.groupId && document.documentId !== binding.documentId)
+    if (unavailable) return
+    setError(undefined)
+    setRenameDocument(document)
+    setRenameTitle(document.title ?? '')
+  }
+
+  async function rename(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault()
+    const client = clientRef.current
+    if (!client || !renameDocument || renaming) return
+    setRenaming(true)
+    setError(undefined)
+    try {
+      await client.updateDocumentMetadata(renameDocument.documentId, { title: renameTitle })
+      await refreshDocuments(client)
+      setRenameDocument(undefined)
+      setRenameTitle('')
+    } catch (cause) {
+      showError(cause)
+    } finally {
+      setRenaming(false)
+    }
+  }
+
+  async function toggleArchive(): Promise<void> {
+    if (!session || !access || access.deleted) return
+    setError(undefined)
+    try {
+      if (access.archived) await session.unarchive()
+      else await session.archive()
+      await refreshDocuments()
     } catch (cause) {
       showError(cause)
     }
@@ -298,7 +346,12 @@ export function CollaborativeWorkspace({
       status?.phase !== 'closed'
   )
   const canShare = Boolean(binding.groupId && access?.selfRole === 'admin' && !access.deleted)
+  const canManageLifecycle = Boolean(
+    binding.groupId && access?.selfRole === 'admin' && !access.deleted
+  )
   const transportLabel = transportDescription(binding.groupId, configuredTransport)
+  const currentDocument = documents.find((document) => document.documentId === session?.documentId)
+  const syncState = syncPresentation(status, access)
 
   if (dashboardVisible) {
     return (
@@ -326,8 +379,8 @@ export function CollaborativeWorkspace({
             EC
           </span>
           <div>
-            <strong>e2e-col</strong>
-            <span>collaboration PoC</span>
+            <strong>SignalCD Modern PoC</strong>
+            <span>independent E2EE-CD research implementation</span>
           </div>
         </div>
         <fieldset className="identity-chip" aria-label="Current identity">
@@ -391,20 +444,36 @@ export function CollaborativeWorkspace({
               const unavailable = Boolean(
                 binding.groupId && document.documentId !== binding.documentId
               )
+              const displayTitle = document.title ?? `Document ${document.documentId.slice(0, 8)}`
               return (
-                <button
-                  type="button"
+                <div
                   key={document.documentId}
-                  className={`document-row ${isCurrent ? 'active' : ''}`}
-                  aria-current={isCurrent ? 'page' : undefined}
-                  disabled={unavailable}
-                  onClick={() => void openDocument(document.documentId)}
+                  className={`document-entry ${isCurrent ? 'active' : ''}`}
                 >
-                  <strong>{document.title ?? `Document ${document.documentId.slice(0, 8)}`}</strong>
-                  <small>
-                    {document.archived ? 'Archived' : new Date(document.updatedAt).toLocaleString()}
-                  </small>
-                </button>
+                  <button
+                    type="button"
+                    className="document-row"
+                    aria-current={isCurrent ? 'page' : undefined}
+                    disabled={unavailable}
+                    onClick={() => void openDocument(document.documentId)}
+                  >
+                    <strong>{displayTitle}</strong>
+                    <small>
+                      {document.archived
+                        ? 'Archived'
+                        : new Date(document.updatedAt).toLocaleString()}
+                    </small>
+                  </button>
+                  <button
+                    type="button"
+                    className="document-rename secondary-button"
+                    aria-label={`Rename ${displayTitle}`}
+                    disabled={unavailable}
+                    onClick={() => beginRename(document)}
+                  >
+                    Rename
+                  </button>
+                </div>
               )
             })}
           </nav>
@@ -415,8 +484,11 @@ export function CollaborativeWorkspace({
             <div>
               <p className="section-label">Document</p>
               <h2 id="editor-title">
-                {session ? `Document ${session.documentId.slice(0, 8)}` : 'Opening document'}
+                {session
+                  ? (currentDocument?.title ?? `Document ${session.documentId.slice(0, 8)}`)
+                  : 'Opening document'}
               </h2>
+              {session ? <small className="document-id">{session.documentId}</small> : null}
             </div>
             <div className="toolbar-actions">
               <span className={`role-badge role-${access?.selfRole ?? 'reader'}`}>
@@ -429,6 +501,14 @@ export function CollaborativeWorkspace({
                 onClick={() => setShareVisible(true)}
               >
                 Share
+              </button>
+              <button
+                type="button"
+                className="secondary-button compact-button"
+                disabled={!canManageLifecycle}
+                onClick={() => void toggleArchive()}
+              >
+                {access?.archived ? 'Unarchive' : 'Archive'}
               </button>
               <button
                 type="button"
@@ -468,6 +548,15 @@ export function CollaborativeWorkspace({
               </button>
             ) : null}
           </fieldset>
+
+          <div
+            className={`sync-state sync-state-${syncState.tone}`}
+            data-testid="sync-state"
+            aria-live="polite"
+          >
+            <strong>{syncState.label}</strong>
+            <span>{syncState.detail}</span>
+          </div>
 
           <label className="sr-only" htmlFor="document-editor">
             Document text
@@ -570,6 +659,71 @@ export function CollaborativeWorkspace({
                 </div>
               ))}
             </div>
+          </section>
+        </div>
+      ) : null}
+
+      {renameDocument ? (
+        <div
+          className="dialog-backdrop"
+          role="dialog"
+          aria-modal="false"
+          onClick={(event) => {
+            if (event.currentTarget === event.target && !renaming) setRenameDocument(undefined)
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && !renaming) setRenameDocument(undefined)
+          }}
+        >
+          <section
+            className="share-dialog rename-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="rename-title"
+            aria-describedby="rename-local-note"
+          >
+            <header>
+              <div>
+                <p className="section-label">Local metadata</p>
+                <h2 id="rename-title">Rename document</h2>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Close rename dialog"
+                disabled={renaming}
+                onClick={() => setRenameDocument(undefined)}
+              >
+                ×
+              </button>
+            </header>
+            <p id="rename-local-note" className="muted metadata-note">
+              This title is stored only on this browser/device. It does not change the document ID,
+              collaboration group, content, or the title seen by other devices.
+            </p>
+            <form onSubmit={(event) => void rename(event)}>
+              <label htmlFor="document-title">Document title</label>
+              <input
+                id="document-title"
+                value={renameTitle}
+                maxLength={MAX_DOCUMENT_TITLE_LENGTH}
+                onChange={(event) => setRenameTitle(event.target.value)}
+                placeholder={`Document ${renameDocument.documentId.slice(0, 8)}`}
+              />
+              <div className="dialog-actions">
+                <button
+                  type="button"
+                  className="secondary-button compact-button"
+                  disabled={renaming}
+                  onClick={() => setRenameDocument(undefined)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="compact-button" disabled={renaming}>
+                  {renaming ? 'Saving…' : 'Save title'}
+                </button>
+              </div>
+            </form>
           </section>
         </div>
       ) : null}

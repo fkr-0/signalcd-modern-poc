@@ -9,7 +9,8 @@
       "!**/upstream",
       "!**/.ws-bridge",
       "!**/build",
-      "!**/test-results"
+      "!**/test-results",
+      "!docs/_layouts"
     ]
   },
   "formatter": {

@@ -13,6 +13,14 @@ async function tick(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0))
 }
 
+async function waitFor(condition: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error('condition was not met before timeout')
+    await new Promise<void>((resolve) => setTimeout(resolve, 5))
+  }
+}
+
 function identity(
   participants: readonly DocumentParticipant[] = [
     { participantId: 'alice', role: 'admin', active: true }
@@ -230,7 +238,13 @@ describe('deterministic client integration: access and convergence', () => {
     // Alice removes Bob
     await aliceSession.removeParticipant('bob')
     network.flush()
-    await tick()
+    await waitFor(() =>
+      bobSession
+        .getAccessState()
+        .participants.some(
+          (participant) => participant.participantId === 'bob' && !participant.active
+        )
+    )
 
     // Bob's access state shows removal
     expect(bobSession.getAccessState().participants).toContainEqual(
