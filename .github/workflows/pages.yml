@@ -8,6 +8,7 @@ on:
       - 'packages/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
       - 'typedoc.json'
       - 'tsconfig.api-docs.json'
       - '.github/workflows/pages.yml'
@@ -53,6 +54,9 @@ jobs:
 
       - name: Add generated API docs to site
         run: |
+          # jekyll-build-pages runs in a container and leaves _site root-owned.
+          # Reclaim only the generated site tree before composing TypeDoc into it.
+          sudo chown -R "$(id -u):$(id -g)" _site
           rm -rf _site/api
           mkdir -p _site/api
           cp -R build/api-docs/. _site/api/
