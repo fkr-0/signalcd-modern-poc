@@ -8,7 +8,15 @@ async function register(page: Page, name: string) {
   await expect(page.getByRole('heading', { name: 'Create your local identity.' })).toBeVisible()
   await page.getByLabel('Display name').fill(name)
   await page.getByRole('button', { name: 'Create identity' }).click()
-  await expect(page.getByRole('heading', { name: 'Your encrypted workspace.' })).toBeVisible()
+  const workspaceHeading = page.getByRole('heading', { name: 'Your encrypted workspace.' })
+  try {
+    await expect(workspaceHeading).toBeVisible()
+  } catch {
+    const registrationError = await page.locator('.error-message').textContent().catch(() => undefined)
+    throw new Error(
+      `identity registration did not reach workspace${registrationError ? `: ${registrationError}` : ''}`
+    )
+  }
   await expect(page.locator('textarea')).toHaveCount(1)
   await expect(page.getByRole('status')).toContainText(/ready\s*·\s*online/i)
 }
