@@ -267,6 +267,20 @@ export class ToySignalCliServer {
         json(response, 200, this.identities.lookup(phoneNumber, request.headers.authorization))
         return
       }
+      if (
+        request.method === 'GET' &&
+        url.pathname.startsWith(MOCK_IDENTITY_ENDPOINTS.publicIdentityPrefix)
+      ) {
+        const phoneNumber = decodeURIComponent(
+          url.pathname.slice(MOCK_IDENTITY_ENDPOINTS.publicIdentityPrefix.length)
+        )
+        json(
+          response,
+          200,
+          this.identities.publicIdentity(phoneNumber, request.headers.authorization)
+        )
+        return
+      }
       if (request.method === 'POST' && url.pathname === MOCK_GROUP_ENDPOINTS.groups) {
         const caller = this.identities.authenticate(request.headers.authorization)
         const value = await readJson(request)

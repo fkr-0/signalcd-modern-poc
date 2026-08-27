@@ -1,6 +1,6 @@
 {
   "name": "signalcd-modern-poc",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "private": true,
   "packageManager": "pnpm@11.3.0",
   "description": "Independent modern proof-of-concept implementation of the SignalCD construction from the USENIX Security 2026 E2EE-CD paper.",

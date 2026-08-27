@@ -8,6 +8,7 @@ import dev.e2ecol.android.protocol.ProtocolEnvelope
 import dev.e2ecol.android.protocol.ProtocolEnvelopeCodec
 import dev.e2ecol.android.storage.E2ColDatabase
 import dev.e2ecol.android.storage.OutboundState
+import java.nio.file.Files
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -213,6 +214,85 @@ class DocumentSessionTest {
         // Snapshot should be unchanged
         assertTrue(session.getSnapshot().contentEquals(snapshotBefore))
         session.close()
+    }
+
+    @Test
+    fun `independent sessions share canonical bootstrap and converge incremental changes`() = runTest {
+        val aliceDb = createDb()
+        val bobDb = createDb()
+        val aliceTransport = mockTransport()
+        val bobTransport = mockTransport()
+        val docId = UUID.randomUUID().toString()
+        val alice = DocumentSession(
+            documentId = docId,
+            senderId = "alice-device",
+            db = aliceDb,
+            transport = aliceTransport,
+            scope = CoroutineScope(SupervisorJob()),
+        )
+        val bob = DocumentSession(
+            documentId = docId,
+            senderId = "bob-device",
+            db = bobDb,
+            transport = bobTransport,
+            scope = CoroutineScope(SupervisorJob()),
+        )
+
+        assertTrue(alice.getSnapshot().contentEquals(bob.getSnapshot()))
+        alice.editText(0, 0, "hello from android")
+        bob.onInboundFrame(aliceTransport.sentFrames.single())
+        assertEquals("hello from android", bob.getText())
+
+        bob.editText(bob.getText().length, 0, " + bob")
+        alice.onInboundFrame(bobTransport.sentFrames.single())
+        assertEquals("hello from android + bob", alice.getText())
+        assertEquals(alice.getText(), bob.getText())
+
+        alice.close()
+        bob.close()
+        aliceDb.close()
+        bobDb.close()
+    }
+
+    @Test
+    fun `persistent Room reopen restores document and continues history`() = runTest {
+        val directory = Files.createTempDirectory("e2e-col-android-m1-")
+        val databasePath = directory.resolve("e2e-col.db").toString()
+        val docId = UUID.randomUUID().toString()
+        try {
+            val firstDb = Room.databaseBuilder<E2ColDatabase>(databasePath)
+                .setDriver(BundledSQLiteDriver())
+                .build()
+            val first = DocumentSession(
+                documentId = docId,
+                senderId = "device-before-restart",
+                db = firstDb,
+                transport = mockTransport(),
+                scope = CoroutineScope(SupervisorJob()),
+            )
+            first.editText(0, 0, "persist across process")
+            assertEquals("persist across process", first.getText())
+            first.close()
+            firstDb.close()
+
+            val reopenedDb = Room.databaseBuilder<E2ColDatabase>(databasePath)
+                .setDriver(BundledSQLiteDriver())
+                .build()
+            val reopened = DocumentSession(
+                documentId = docId,
+                senderId = "device-after-restart",
+                db = reopenedDb,
+                transport = mockTransport(),
+                scope = CoroutineScope(SupervisorJob()),
+            )
+            assertEquals("persist across process", reopened.getText())
+            reopened.editText(reopened.getText().length, 0, " + resumed")
+            assertEquals("persist across process + resumed", reopened.getText())
+            reopened.close()
+            reopenedDb.close()
+        } finally {
+            directory.toFile().deleteRecursively()
+        }
     }
 }
 

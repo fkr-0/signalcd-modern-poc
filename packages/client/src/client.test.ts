@@ -1,3 +1,4 @@
+import { CollaborativeDocument } from '@e2e-col/core'
 import {
   archivePayloadSigningBytes,
   authorizationControlCommitment,
@@ -227,6 +228,107 @@ describe('CollaborativeClient and DocumentSession', () => {
     await tick()
     expect(bobSession.getView().text).toBe('manual convergence')
     expect(aliceSession.getStatus().pendingOutbound).toBe(0)
+
+    await alice.close()
+    await bob.close()
+  })
+
+  it('persists and converges structured blocks, comments, and attachment metadata over the existing CRDT envelope', async () => {
+    const network = new DeterministicTransportNetwork()
+    const storageAlice = new MemoryCollaborativeStorage()
+    const storageBob = new MemoryCollaborativeStorage()
+    const participants: readonly DocumentParticipant[] = [
+      { participantId: 'alice', role: 'admin', active: true },
+      { participantId: 'bob', role: 'writer', active: true }
+    ]
+    const alice = createClient({
+      senderId: 'alice',
+      network,
+      storage: storageAlice,
+      identity: identity(participants)
+    })
+    const bob = createClient({
+      senderId: 'bob',
+      network,
+      storage: storageBob,
+      identity: identity(participants)
+    })
+    const aliceSession = await alice.createDocument({ documentId: documentA })
+    const aliceStored = await storageAlice.loadDocument(documentA)
+    if (!aliceStored) throw new Error('alice document was not persisted')
+    await storageBob.saveDocument(aliceStored)
+    await storageBob.saveAccessControl(documentA, {
+      selfRole: 'writer',
+      participants,
+      archived: false,
+      deleted: false,
+      revision: 0
+    })
+    const bobSession = await bob.openDocument(documentA)
+
+    await aliceSession.insertBlock({
+      id: 'task-1',
+      kind: 'list-item',
+      text: 'Structured collaboration',
+      listStyle: 'task',
+      checked: false
+    })
+    await aliceSession.addComment({
+      id: 'comment-1',
+      authorId: 'alice',
+      blockId: 'task-1',
+      body: 'Review together',
+      createdAt: 100
+    })
+    await aliceSession.addAttachment({
+      id: 'attachment-1',
+      name: 'diagram.svg',
+      mediaType: 'image/svg+xml',
+      sizeBytes: 256,
+      sha256: 'b'.repeat(64),
+      contentRef: 'sha256:bbbbbbbb'
+    })
+    network.flush()
+    await tick()
+
+    expect(bobSession.getView()).toMatchObject({
+      text: '',
+      blocks: [
+        {
+          id: 'task-1',
+          kind: 'list-item',
+          text: 'Structured collaboration',
+          listStyle: 'task',
+          checked: false,
+          indent: 0
+        }
+      ],
+      comments: [
+        {
+          id: 'comment-1',
+          authorId: 'alice',
+          blockId: 'task-1',
+          body: 'Review together',
+          createdAt: 100,
+          resolved: false
+        }
+      ],
+      attachments: [
+        expect.objectContaining({ id: 'attachment-1', name: 'diagram.svg', sizeBytes: 256 })
+      ]
+    })
+
+    await bobSession.updateBlock('task-1', { checked: true })
+    await bobSession.resolveComment('comment-1')
+    network.flush()
+    await tick()
+    expect(aliceSession.getView().blocks[0]).toMatchObject({ id: 'task-1', checked: true })
+    expect(aliceSession.getView().comments[0]).toMatchObject({ id: 'comment-1', resolved: true })
+
+    const saved = await storageAlice.loadDocument(documentA)
+    if (!saved) throw new Error('structured document was not persisted')
+    const restored = new CollaborativeDocument(saved.snapshot)
+    expect(restored.getStructuredView().attachments).toHaveLength(1)
 
     await alice.close()
     await bob.close()
@@ -1159,6 +1261,27 @@ describe('CollaborativeClient and DocumentSession', () => {
           recovery: { snapshotThresholdOutboundEntries: 0 }
         })
     ).toThrow('positive safe integer')
+  })
+
+  it('rejects malformed automatic retry policies', () => {
+    const base = {
+      senderId: 'alice',
+      storage: new MemoryCollaborativeStorage(),
+      identity: identity(),
+      transportFactory: () => new DeterministicTransportNetwork().createTransport('alice')
+    }
+    expect(() => new CollaborativeClient({ ...base, retry: { initialDelayMs: -1 } })).toThrow(
+      'non-negative safe integer'
+    )
+    expect(
+      () => new CollaborativeClient({ ...base, retry: { initialDelayMs: 10, maxDelayMs: 9 } })
+    ).toThrow('>= initialDelayMs')
+    expect(() => new CollaborativeClient({ ...base, retry: { multiplier: 0.5 } })).toThrow(
+      'finite number >= 1'
+    )
+    expect(() => new CollaborativeClient({ ...base, retry: { maxAttempts: 0 } })).toThrow(
+      'positive safe integer'
+    )
   })
 
   it('converges signed removals and blocks the removed participant from future edits', async () => {

@@ -197,7 +197,7 @@ export function createBrowserIdentityAdapter(
       member = membersByUser.get(participantId)
     }
     if (!member) throw new Error(`unknown collaboration participant ${participantId}`)
-    const remote = await options.identityClient.fetchRemoteIdentity(
+    const remote = await options.identityClient.fetchRemoteIdentityMetadata(
       member.phone_number,
       options.identity
     )
@@ -231,7 +231,7 @@ export function createBrowserIdentityAdapter(
         member = membersByUser.get(actorUserId)
       }
       if (!member) return false
-      const remote = await options.identityClient.fetchRemoteIdentity(
+      const remote = await options.identityClient.fetchRemoteIdentityMetadata(
         member.phone_number,
         options.identity
       )
@@ -244,7 +244,10 @@ export function createBrowserIdentityAdapter(
       )
     },
     async resolveParticipant(phoneNumber) {
-      const remote = await options.identityClient.fetchRemoteIdentity(phoneNumber, options.identity)
+      const remote = await options.identityClient.fetchRemoteIdentityMetadata(
+        phoneNumber,
+        options.identity
+      )
       return {
         participantId: remote.userId,
         ...(remote.displayName === undefined ? {} : { displayName: remote.displayName })

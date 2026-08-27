@@ -4,6 +4,7 @@ import type {
   RegisteredIdentityClaim,
   RegistrationPublicMaterial,
   RemoteIdentityBundle,
+  RemoteIdentityPublicMaterial,
   SignedPrekeyPublicMaterial,
   SignedPrekeyRotationClaim
 } from './types'
@@ -11,6 +12,19 @@ import type {
 export interface HttpIdentityProviderOptions {
   readonly baseUrl: string
   readonly fetch?: typeof fetch
+}
+
+function remotePublicMaterial(value: unknown): RemoteIdentityPublicMaterial {
+  const record = asRecord(value)
+  const displayName = typeof record.display_name === 'string' ? record.display_name : undefined
+  return {
+    userId: requiredString(record.user_id, 'user_id'),
+    phoneNumber: requiredString(record.phone_number, 'phone_number'),
+    ...(displayName === undefined ? {} : { displayName }),
+    identityKeyPublic: requiredString(record.identity_key_public, 'identity_key_public'),
+    signedPrekeyPublic: requiredString(record.signed_prekey_public, 'signed_prekey_public'),
+    signedPrekeySignature: requiredString(record.signed_prekey_signature, 'signed_prekey_signature')
+  }
 }
 
 export class IdentityProviderError extends Error {
@@ -57,6 +71,17 @@ export class HttpIdentityProvider implements IdentityProvider {
   async lookupKeys(phoneNumber: string, sessionToken: string): Promise<RemoteIdentityBundle> {
     return remoteBundle(
       await this.request(`/api/v1/identity/keys/${encodeURIComponent(phoneNumber)}`, {
+        headers: authorization(sessionToken)
+      })
+    )
+  }
+
+  async lookupIdentity(
+    phoneNumber: string,
+    sessionToken: string
+  ): Promise<RemoteIdentityPublicMaterial> {
+    return remotePublicMaterial(
+      await this.request(`/api/v1/identity/public/${encodeURIComponent(phoneNumber)}`, {
         headers: authorization(sessionToken)
       })
     )

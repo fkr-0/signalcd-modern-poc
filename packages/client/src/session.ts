@@ -1,4 +1,11 @@
-import { CollaborativeDocument, type TextEdit } from '@e2e-col/core'
+import {
+  CollaborativeDocument,
+  type CreateDocumentComment,
+  type DocumentAttachment,
+  type DocumentBlock,
+  type DocumentBlockUpdate,
+  type TextEdit
+} from '@e2e-col/core'
 import {
   type ArchivePayload,
   type AuthorizationRootPayload,
@@ -57,6 +64,7 @@ import type {
   DocumentSessionCommands,
   DocumentSessionEvent,
   DocumentView,
+  RetryPolicy,
   SessionStatus,
   SyncMode
 } from './types'
@@ -73,6 +81,7 @@ interface DocumentSessionOptions {
   readonly allowAuthorizationRootCreation: boolean
   readonly replayAttemptedOnReconnect: boolean
   readonly publishSnapshotOnRecoverySignal: boolean
+  readonly retryPolicy: Required<RetryPolicy>
   readonly snapshotThresholdOutboundEntries?: number
   readonly onClosed: () => void
 }
@@ -100,6 +109,8 @@ export class DocumentSession implements DocumentSessionCommands {
   private readonly bufferedInbound: Uint8Array[] = []
   private replayInFlight = false
   private recoveryInFlight = false
+  private retryTimer: ReturnType<typeof setTimeout> | undefined
+  private retryAttempts = 0
   private status: SessionStatus
 
   constructor(private readonly options: DocumentSessionOptions) {
@@ -448,7 +459,14 @@ export class DocumentSession implements DocumentSessionCommands {
   }
 
   getView(): DocumentView {
-    return { text: this.document.getText(), heads: [...this.document.getHeads()] }
+    const structured = this.document.getStructuredView()
+    return {
+      text: this.document.getText(),
+      heads: [...this.document.getHeads()],
+      blocks: structured.blocks,
+      comments: structured.comments,
+      attachments: structured.attachments
+    }
   }
 
   getStatus(): SessionStatus {
@@ -469,6 +487,7 @@ export class DocumentSession implements DocumentSessionCommands {
   setSyncMode(mode: SyncMode): void {
     this.assertActive()
     this.syncMode = mode
+    if (mode === 'manual') this.cancelRetryTimer()
     if (mode === 'auto' && this.options.transport.getState() === 'online') void this.flush()
   }
 
@@ -486,6 +505,42 @@ export class DocumentSession implements DocumentSessionCommands {
 
   async spliceText(edit: TextEdit): Promise<void> {
     await this.applyLocalEdit((document) => document.spliceText(edit))
+  }
+
+  async insertBlock(block: DocumentBlock, index?: number): Promise<void> {
+    await this.applyLocalEdit((document) => document.insertBlock(block, index))
+  }
+
+  async updateBlock(blockId: string, update: DocumentBlockUpdate): Promise<void> {
+    await this.applyLocalEdit((document) => document.updateBlock(blockId, update))
+  }
+
+  async moveBlock(blockId: string, toIndex: number): Promise<void> {
+    await this.applyLocalEdit((document) => document.moveBlock(blockId, toIndex))
+  }
+
+  async removeBlock(blockId: string): Promise<void> {
+    await this.applyLocalEdit((document) => document.removeBlock(blockId))
+  }
+
+  async addComment(comment: CreateDocumentComment): Promise<void> {
+    await this.applyLocalEdit((document) => document.addComment(comment))
+  }
+
+  async resolveComment(commentId: string, resolved = true): Promise<void> {
+    await this.applyLocalEdit((document) => document.resolveComment(commentId, resolved))
+  }
+
+  async removeComment(commentId: string): Promise<void> {
+    await this.applyLocalEdit((document) => document.removeComment(commentId))
+  }
+
+  async addAttachment(attachment: DocumentAttachment): Promise<void> {
+    await this.applyLocalEdit((document) => document.addAttachment(attachment))
+  }
+
+  async removeAttachment(attachmentId: string): Promise<void> {
+    await this.applyLocalEdit((document) => document.removeAttachment(attachmentId))
   }
 
   async publishSnapshot(): Promise<void> {
@@ -635,6 +690,7 @@ export class DocumentSession implements DocumentSessionCommands {
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
+    this.cancelRetryTimer()
     for (const unsubscribe of this.unsubscribers.splice(0)) unsubscribe()
     this.inboundReady = false
     this.bufferedInbound.length = 0
@@ -731,10 +787,12 @@ export class DocumentSession implements DocumentSessionCommands {
       // is merged.
       this.setStatus({
         phase: this.status.recoveryRequired ? 'recovering' : 'ready',
+        retry: { attempt: 0, active: false },
         ...(trackReplay
           ? { replay: { total: records.length, completed: sent.length, active: false } }
           : {})
       })
+      this.retryAttempts = 0
     } catch (cause) {
       if (sent.length > 0) await this.options.storage.markOutboundAttempt(sent, this.options.now())
       await this.refreshPending()
@@ -748,8 +806,49 @@ export class DocumentSession implements DocumentSessionCommands {
         true,
         cause
       )
+      this.scheduleRetry()
       throw cause
     }
+  }
+
+  private scheduleRetry(): void {
+    const policy = this.options.retryPolicy
+    if (
+      !policy.enabled ||
+      this.retryTimer !== undefined ||
+      this.closed ||
+      !this.inboundReady ||
+      this.syncMode !== 'auto' ||
+      this.options.transport.getState() !== 'online' ||
+      this.retryAttempts >= policy.maxAttempts
+    )
+      return
+
+    const attempt = this.retryAttempts + 1
+    const delay = Math.min(
+      policy.maxDelayMs,
+      Math.round(policy.initialDelayMs * policy.multiplier ** (attempt - 1))
+    )
+    const nextAttemptAt = this.options.now() + delay
+    this.setStatus({ retry: { attempt, active: true, nextAttemptAt } })
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = undefined
+      this.setStatus({ retry: { attempt, active: false } })
+      if (this.closed || this.syncMode !== 'auto' || this.options.transport.getState() !== 'online')
+        return
+      this.retryAttempts = attempt
+      void this.flush().catch(() => undefined)
+    }, delay)
+  }
+
+  private cancelRetryTimer(resetAttempts = false): void {
+    if (this.retryTimer !== undefined) {
+      clearTimeout(this.retryTimer)
+      this.retryTimer = undefined
+      if (this.status.retry?.active)
+        this.setStatus({ retry: { attempt: this.status.retry.attempt, active: false } })
+    }
+    if (resetAttempts) this.retryAttempts = 0
   }
 
   private async replayOutbound(): Promise<void> {
@@ -2132,10 +2231,12 @@ export class DocumentSession implements DocumentSessionCommands {
 
   private handleTransportState(state: SessionStatus['transport']): void {
     if (this.closed) return
-    if (state === 'offline' || state === 'disconnected')
+    if (state === 'offline' || state === 'disconnected') {
+      this.cancelRetryTimer()
       this.setStatus({ phase: 'offline', transport: state })
-    else if (state === 'connecting') this.setStatus({ phase: 'opening', transport: state })
+    } else if (state === 'connecting') this.setStatus({ phase: 'opening', transport: state })
     else if (state === 'online') {
+      this.cancelRetryTimer(true)
       this.setStatus({
         phase: !this.inboundReady
           ? 'opening'

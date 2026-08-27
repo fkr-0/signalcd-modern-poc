@@ -1,0 +1,127 @@
+release:
+  project: SignalCD Modern PoC
+  repository: fkr-0/signalcd-modern-poc
+  version: 0.0.5
+  proposed_tag: v0.0.5
+  tag_kind: annotated
+  tag_created: true
+  tag_pushed: false
+  channel: technical-preview
+  branch: ci/webkit-diagnose
+  base_revision_before_candidate: b7f88596ea1819d7a7faa6d1a7dcfc480106b7aa
+  protocol_envelope: v1
+
+scope:
+  included:
+    - additive structured Automerge block/list/comment/attachment-metadata operations exposed through DocumentSession
+    - bounded configurable automatic retry scheduling above durable outbound state without redefining transport handoff as peer acknowledgement
+    - non-consuming stable remote identity metadata lookup while encryption continues to consume fresh one-time X25519 prekeys
+    - Android M1 canonical TypeScript/JVM Automerge bootstrap and cross-runtime fixture coverage
+    - Android two-native-session incremental convergence and file-backed Room close/reopen continuation evidence
+    - reconciled roadmap plus getting-started, ADR, and desktop-feasibility documentation
+    - synchronized 0.0.5 workspace and Android application version metadata
+  protected_inherited_files_excluded_from_release_commit:
+    - apps/android/core/protocol/src/main/kotlin/dev/e2ecol/android/protocol/ProtocolEnvelope.kt
+    - apps/android/core/protocol/src/test/kotlin/dev/e2ecol/android/protocol/EnvelopeKindTest.kt
+    - apps/android/core/protocol/src/test/kotlin/dev/e2ecol/android/protocol/ProtocolEnvelopeCodecTest.kt
+    - docs/android-integration.md
+    - packages/protocol/src/protocol.test.ts
+  explicitly_not_claimed:
+    - authenticated long-term Ed25519 identity-key rebind or silent directory key replacement
+    - Android native E2EE/Keystore parity or Compose shared-document send wiring
+    - a desktop runtime/scaffold before host/security/lifecycle contract ratification
+    - iOS implementation
+    - production-ready security
+    - real two-account Signal qualification
+    - Signal-equivalent durability when all PeerJS participants are offline
+    - TURN-required PeerJS deployment qualification
+
+verification:
+  workspace_check:
+    command: pnpm run check
+    result: pass
+    version_check: '0.0.5 / 10 workspaces synchronized'
+    biome_files: 143
+    vitest_files_passed: 42
+    vitest_files_skipped: 1
+    vitest_tests_passed: 318
+    vitest_tests_skipped: 1
+    skipped_test: apps/sidecar/src/real-signal.smoke.test.ts
+    production_web_build: pass
+  standard_browser_e2e:
+    command: 'CI=1 E2E_COL_TEST_TOY_PORT=28205 pnpm exec playwright test --config playwright.release005.config.ts --project=chromium --project=firefox'
+    result: pass
+    tests: 14
+    duration: '38.7s'
+    browsers:
+      chromium: pass
+      firefox: pass
+  peerjs_browser_e2e:
+    command: 'CI=1 E2E_COL_TEST_PEERJS_TOY_PORT=28206 E2E_COL_TEST_PEERJS_PORT=19205 E2E_COL_TEST_PEERJS_WEB_PORT=4285 pnpm run test:e2e:peerjs'
+    result: pass
+    tests: 2
+    browsers:
+      chromium: 'pass, 56.7s'
+      firefox: 'pass, 17.2s'
+    behaviors:
+      - three encrypted browser clients converge through local PeerServer
+      - late replay remains available while replay-carrying participants are online
+      - elected browser hub loss triggers survivor reconnect/re-election
+      - post-loss edit converges
+  local_webkit:
+    command: 'CI=1 E2E_COL_TEST_TOY_PORT=28207 pnpm exec playwright test --config playwright.release005.config.ts --project=webkit'
+    result: environment_blocked_before_browser_launch
+    reason: 'Playwright reports missing host runtime libraries libicu74, libxml2 and libflite1'
+    source_failures_observed: false
+    ci_contract: 'tag/CI workflows install Playwright browser dependencies with --with-deps'
+  android_core:
+    command: 'JAVA_HOME=/usr/lib/jvm/java-17-openjdk GRADLE_USER_HOME=$PWD/apps/android/.gradle/release-user-home-004 pnpm run android:check'
+    result: pass
+    gradle: 9.3.1
+    test_suites: 16
+    tests: 84
+    failures: 0
+    errors: 0
+    skipped: 0
+    note: 'pre-existing warning reports Kotlin Gradle plugin loaded in multiple subprojects'
+  android_assemble:
+    command: 'JAVA_HOME=/usr/lib/jvm/java-17-openjdk GRADLE_USER_HOME=$PWD/apps/android/.gradle/release-user-home pnpm run android:assemble'
+    result: environment_blocked
+    reason: '/opt/android-sdk is read-only and API 36 / Build Tools 36.0.0 licenses/components are unavailable locally'
+    ci_contract: 'release workflow provisions Android API 36 and Build Tools 36.0.0'
+  api_docs:
+    command: pnpm run api:docs
+    result: pass
+    output: build/api-docs
+  workflow_lint:
+    command: actionlint .github/workflows/*.yml
+    result: pass
+  frozen_install:
+    command: pnpm install --offline --frozen-lockfile
+    result: pass
+  diff_check:
+    command: git diff --check
+    result: pass
+
+known_limitations:
+  real_signal:
+    status: pending_external_validation
+    experiment: docs/SIGNALCLI-EXPERIMENT.md
+  long_term_identity_rebind:
+    status: intentionally_unimplemented
+    requirement: explicit signed rebind/re-verification preserving R6 commitments and historical signature verification
+  android_native_e2ee:
+    status: pending_m2
+  desktop:
+    status: feasible_unscaffolded
+    contract: docs/DESKTOP-FEASIBILITY.md
+  ios:
+    status: not_started
+
+publication:
+  requested_side_effects:
+    - create one local release commit
+    - create annotated local tag v0.0.5
+  push: not_requested
+  github_release: not_requested
+  tag_target: release commit containing this evidence

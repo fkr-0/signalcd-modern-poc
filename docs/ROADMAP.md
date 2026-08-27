@@ -1,27 +1,31 @@
 # Roadmap
 
-Status: **2026-08-22**
-Current release: **v0.0.2**
+Status: **2026-08-27**
+Current synchronized workspace version: **v0.0.5** technical-preview candidate
 
 This document tracks implementation gaps, future features, and production
-readiness milestones beyond the current v0.0.2 state.
+readiness beyond the current v0.0.5 technical-preview state. Items marked
+complete describe repository behavior and local qualification only; the real
+Signal deployment gate remains separate.
 
 ## Current state summary
 
 | Area | Status | Key gap |
 |------|--------|---------|
-| CRDT core | Solid | Structured document model missing |
-| Protocol | Solid | — |
-| Identity | Solid | Key rotation lifecycle missing |
-| Encryption | Solid | — |
-| Access control | Complete (R6) | Authenticated root + durable causal chain + signed fork resolution implemented |
-| Client SDK | Done | — |
-| Storage | Good | Corruption-recovery fixtures remain |
-| Transport | Good | — |
-| Mock sidecar | Solid | Debug decrypt key boundary |
-| Web app | Functional | Multi-document, offline UX |
+| CRDT core | Structured baseline complete | Rich editor UX and attachment-content layer remain |
+| Protocol | Solid | Generic causal wire-gap proof is still intentionally absent from v1 |
+| Identity | Prekey lifecycle + stable metadata lookup complete | Authenticated long-term Ed25519 rebind remains unresolved |
+| Encryption | Solid technical-preview boundary | No Double Ratchet / post-compromise-security claim |
+| Access control | Complete (R6) | First-contact transparency/freshness remains deployment work |
+| Client SDK | Good | Structured APIs + bounded auto retry are implemented |
+| Storage | Good | Workload tuning/corruption fixtures remain |
+| Transport | Good | PeerJS is live-P2P only; real Signal live evidence remains external |
+| Mock sidecar | Solid | Debug decrypt remains explicitly toy/debug-only |
+| Web app | Functional | Rich structured-document editor/management UX remains |
 | Production sidecar | Partial | signal-cli v0.14.7 boundary audited; live two-account evidence unavailable |
-| Android | Phase 1 proxy complete | M1 CRDT/process-restore evidence and M2 native E2EE remain |
+| Android | M1 lower-layer implementation qualified | Native E2EE/Compose send wiring remains gated |
+| Desktop | Feasible, intentionally unscaffolded | Ratify host/security/lifecycle contract before implementation |
+| iOS | Not started | No meaningful reusable native implementation yet |
 
 ## 1. Production gaps (must-fix before real Signal)
 
@@ -160,7 +164,7 @@ readiness milestones beyond the current v0.0.2 state.
   forge a valid root/control/resolution or roll back an established durable replica.
   R5 live two-account real-Signal evidence remains separately unavailable.
 
-## 2. Feature gaps (post-v0.0.2)
+## 2. Feature gaps (post-v0.0.5 baseline)
 
 ### 2.1 Multi-document support
 
@@ -209,15 +213,28 @@ readiness milestones beyond the current v0.0.2 state.
   observes durable queue depth plus ordered reconnect replay progress. Persistent-browser coverage
   proves queued work survives profile restart, replays with the same durable outbound identity, and
   reports replay completion without weakening dedup or authorization state.
-- **Remaining §2.2 gaps:** None for the roadmap target above. Automatic retry/backoff policy for
-  production transports remains transport/reliability work rather than a user-facing sync-state
-  semantic.
+- **Automatic retry/backoff (2026-08-27):** auto-sync sessions now have bounded configurable
+  exponential retry above the durable outbound queue. Timers cancel on manual mode/offline/close,
+  reconnect resets the retry generation, and `SessionStatus.retry` reports local scheduler state.
+  Retry success remains transport handoff only, never peer acknowledgement or remote merge proof.
+- **Remaining §2.2 gaps:** None for the defined UX/reliability baseline. Transport-specific reconnect
+  behavior and real deployment tuning remain implementation/deployment concerns.
 
 ### 2.3 Structured document model
 
-- **Current:** Plain text only (`CollaborativeDocument.getText()`)
-- **Target:** Block/list/comment/attachment operations
-- **Gap:** No structured CRDT model; transport/protocol remain structure-agnostic
+- **Status:** Core/client structured baseline implemented (2026-08-27).
+- `CollaborativeDocument` now supports additive block/list/comment/attachment-metadata operations:
+  paragraph/heading/list-item/quote/code blocks, task/list attributes, block move/update/remove,
+  comments/resolution, and bounded attachment metadata/content references.
+- The historical text-only canonical Automerge bootstrap remains byte-compatible. Structured
+  collections are created lazily, so old snapshots load without a forced migration.
+- `DocumentSession` exposes the structured operations through the same authorization -> durable
+  persistence -> `automerge-change` -> E2EE -> transport pipeline as text. No new protocol kind or
+  transport wire format is required.
+- Focused tests prove structured round-trip/convergence and two real client sessions exchanging
+  task state, comments, comment resolution, and attachment metadata.
+- **Remaining:** a first-class rich editor UI, attachment byte/content transport/storage, structured
+  accessibility/keyboard UX, and migration/product policy for richer schemas beyond this baseline.
 - **Reference:** `TARGET-API-SPEC.md` §5.3
 
 ### 2.4 Key rotation lifecycle
@@ -237,6 +254,9 @@ readiness milestones beyond the current v0.0.2 state.
     targeting ten available public prekeys. Newly generated private material is
     persisted before upload; interrupted publication is idempotently retried on the
     next session open.
+  - Stable public-identity metadata lookup is now separated from consumable encryption-key lookup.
+    Signature verification, participant resolution, and identity commitments no longer consume
+    one-time X25519 prekeys; actual encryption still deliberately obtains a fresh consumable bundle.
   - The outer `ProtocolEnvelope` remains v1 and the existing encrypted-envelope key
     selector carries rotation without a wire-version change.
 - **Authorization invariant:** the long-term Ed25519 identity key is unchanged by this
@@ -256,11 +276,13 @@ readiness milestones beyond the current v0.0.2 state.
 
 ### 2.6 Durable attempt state
 
-- **Status:** Baseline complete. Outbound records persist `state` and `attempts`,
-  restart replay reuses the durable record, and Phase-2 browser evidence observes
-  a pending record become the same attempted record after profile restart.
-- **Remaining:** Production retry scheduling/backoff policy above the durable
-  counters remains transport/client policy work.
+- **Status:** Complete for the technical-preview client policy (2026-08-27).
+- Outbound records persist `state` and `attempts`; restart replay reuses the durable record.
+- Auto-sync sessions add bounded configurable exponential retry with explicit scheduler status.
+  Exhaustion leaves work durable; changing to manual/offline/closed cancels the timer, and ordinary
+  send success is still not described as remote acknowledgement.
+- **Remaining:** deployment-specific tuning and transport-native reconnect policy, not missing
+  durable attempt semantics.
 
 ## 3. Platform extensions
 
@@ -272,28 +294,55 @@ readiness milestones beyond the current v0.0.2 state.
   or invented auth frame, explicit remote opt-in with mandatory `wss://`, binary
   frames, truthful connection state, and browser-parity recovery semantics where
   only close code `4409` is explicit transport-history-risk evidence.
+- Native ProtocolEnvelope-v1 parity includes the canonical R6 `authorization-resolution`
+  kind at wire code `8` (with `chunk` at `7`), with matching TypeScript/Kotlin direct-frame
+  and chunk-`originalKind` golden fixtures so the platform kind tables cannot silently drift.
 - Phase 1 intentionally does **not** wire the Compose draft to outbound CRDT traffic.
   The native encrypted `E2EE`/Keystore layer is still M2 work, so enabling production
   document sends now would weaken the established client-side encryption boundary.
-- **Remaining Android milestones:** M1 still needs JS↔JVM Automerge interop fixtures,
-  process-death restore evidence, two-client sidecar convergence, and
-  `DocumentSession`/Compose integration. M2 then supplies native identity/encrypted
-  envelope parity. Background reliability/recovery UX remains M3/M4.
-- Direct/on-device Signal integration remains the later M5 feasibility path; Phase 1
-  does not access Signal internals or provision/link accounts.
+- **M1 implementation added (2026-08-27):** Android now bootstraps new documents from the same
+  deterministic canonical empty Automerge history as `@e2e-col/core`; independently created native
+  replicas therefore reference the same initial text object instead of minting incompatible random
+  histories. A checked-in TypeScript Automerge snapshot fixture is loaded/edited by JVM tests, a
+  repository Vitest guard keeps the fixture readable from TypeScript, two independent native
+  `DocumentSession`s exchange incremental changes, and a file-backed Room close/reopen fixture
+  restores and continues document history.
+- **Qualification (2026-08-27):** the repository's shared Gradle dependency cache contains
+  root-owned Kotlin directories, so the first canonical `pnpm android:check` invocation could not
+  install Kotlin 2.4.10 there. Re-running the exact six-module Android test vector with Gradle 9.3.1
+  and an isolated user-writable `GRADLE_USER_HOME` succeeded. The resulting XML evidence contains
+  16 test suites / 84 tests, 0 failures, 0 errors, 0 skipped; the session module contributes 8 tests
+  including the new TypeScript fixture and two new M1 `DocumentSession` regressions.
+- **M1/M2 boundary:** Compose draft -> collaboration send wiring remains intentionally disabled.
+  The current native session emits plaintext `ProtocolEnvelope` bytes; wiring it into production UI
+  before native E2EE/identity parity would weaken the browser-owned encryption boundary. M2 must
+  supply native identity/encrypted-envelope parity first (or the app must reuse the browser E2EE
+  layer without exposing private keys).
+- Background reliability/recovery UX remains M3/M4. Direct/on-device Signal remains the later M5
+  feasibility path; the current app does not access Signal internals or provision/link accounts.
 
 ### 3.2 iOS app
 
-- **Status:** Not started
-- **Key challenges:**
-  - Signal secret access (App Group sharing, Keychain)
-  - Background execution limits
-  - App Store review for crypto apps
+- **Status:** Not started; intentionally no empty scaffold.
+- There is not yet a meaningful reusable native identity/CRDT/sidecar composition that justifies
+  adding an iOS target. Starting one now would create platform and key-lifecycle surface without
+  advancing the qualified collaboration boundary.
+- **Future prerequisites:** decide how the browser-owned crypto model maps to Keychain/non-exportable
+  keys, define background/reconnect limits, select a native Automerge/runtime path, and establish
+  sidecar/Signal ownership plus App Store crypto/export constraints.
 
 ### 3.3 Desktop (Electron/Tauri)
 
-- **Status:** Not started
-- **Approach:** Reuse web app + sidecar; native sidecar binary
+- **Status:** Feasible, intentionally unscaffolded (2026-08-27).
+- The existing web renderer + IndexedDB/WebCrypto ownership + `WebSocketTransport` + localhost
+  sidecar can be wrapped safely without a protocol rewrite. `docs/DESKTOP-FEASIBILITY.md` records
+  the wrapper-only security boundary and smallest implementation sequence.
+- Tauri is the preferred implementation candidate, but no dependency/runtime decision is ratified
+  yet. Before code lands, repository authority must freeze renderer origin/profile/CSP/navigation,
+  a narrow non-secret host->renderer config API, sidecar lifecycle/supervision, Signal ownership,
+  endpoint composition, storage lifecycle, and acceptance matrix.
+- A native sidecar rewrite is not required for Desktop Phase 1; supervising the existing configured
+  Node sidecar is sufficient. Signal provisioning/linking remains outside the desktop shell.
 
 ## 4. Testing gaps
 
@@ -347,16 +396,18 @@ readiness milestones beyond the current v0.0.2 state.
 
 ### 5.1 Getting started guide
 
-- **Current:** README has basic setup instructions
-- **Gap:** No step-by-step guide for: register identity → create document → invite peer → edit together
+- **Status:** Complete for the technical-preview workflow (2026-08-27).
+- `docs/GETTING-STARTED.md` covers pnpm install/verification, toy service + browser startup,
+  registration, document/group creation, invitation, encrypted convergence, offline/retry semantics,
+  PeerJS alternative transport, structured APIs, and the remaining real-Signal gates.
 
 ### 5.2 Architecture decision records
 
-- **Gap:** No ADRs for key decisions:
-  - Why Automerge over Yjs?
-  - Why X25519+AES-GCM over Signal's Double Ratchet?
-  - Why sidecar over in-browser Signal?
-  - Why per-recipient encryption over group key?
+- **Status:** Baseline ADR set implemented (2026-08-27).
+- `docs/adr/` records Automerge-over-Yjs, application-envelope E2EE, sidecar isolation,
+  per-recipient encryption, and the bounded PeerJS alternative-transport semantics.
+- New trust-boundary or interoperability decisions should extend the numbered ADR series rather than
+  being encoded only in implementation comments.
 
 ### 5.3 API reference
 
@@ -382,35 +433,45 @@ readiness milestones beyond the current v0.0.2 state.
 
 ### 6.3 Key bundle fetching
 
-- **Current:** `fetchRemoteIdentity()` makes an HTTP call per recipient per encryption
-- **Concern:** N recipients = N HTTP calls per edit
-- **Mitigation:** Cache `RemoteIdentity` in IndexedDB; refresh on stale
+- **Current:** encryption still performs one consumable key-bundle lookup per recipient, which is
+  intentional while one-time prekeys are used. Stable identity/signature/commitment reads use the
+  separate non-consuming `fetchRemoteIdentityMetadata()` path when the provider supports it.
+- **Qualified invariant:** repeated stable metadata reads do not decrement the one-time-prekey pool;
+  an actual encryption-key lookup does.
+- **Remaining concern:** N recipients still means N encryption bundle lookups. Do not "optimize" this
+  by caching/reusing a one-time prekey. A future session/prekey cache needs explicit single-use and
+  rotation semantics before it can reduce network calls safely.
 
 ## 7. Priority order
 
 ```
-P0 (blocking production):
-  1. Real signal-cli integration
+P0 (blocking production deployment):
+  1. Real two-account signal-cli smoke + deployment-specific body-limit evidence (external gate)
   2. Atomic snapshot + outbound (complete)
   3. Durable seen-message ledger (complete)
 
-P1 (production quality):
+P1 (production quality baseline):
   4. Snapshot recovery (complete for provable loss signals)
   5. Authenticated access control review (R6 complete for authenticated-identity model)
-  6. Integration test (full E2EE mock-Signal path complete)
+  6. Full E2EE mock-Signal integration + browser restart evidence (complete)
+  7. Bounded client retry/backoff above durable outbound (complete)
 
-P2 (feature completeness):
-  7. Multi-document UI
-  8. Offline-first UX
-  9. Key rotation lifecycle (prekey lifecycle complete; identity-key rebind gap above)
-  10. Persistent dedup (complete)
+P2 (feature completeness baseline):
+  8. Multi-document UI/local metadata (complete)
+  9. Offline-first UX (complete)
+  10. X25519 signed/one-time-prekey lifecycle (complete)
+  11. Stable identity metadata lookup without one-time-prekey consumption (complete)
+  12. Persistent dedup (complete)
+  13. Structured CRDT/core-client operation baseline (complete; rich editor remains)
 
 P3 (platform extension):
-  11. Android app (Phase 1: sidecar proxy) (complete)
-  12. Desktop app
+  14. Android M1 lower-layer implementation + isolated-cache JVM qualification (complete)
+  15. Android M2 native E2EE/identity parity before Compose collaboration send wiring
+  16. Desktop wrapper (feasible; contract ratification before scaffold)
 
-P4 (future):
-  13. Structured document model
-  14. iOS app
-  15. Double Ratchet (if forward secrecy beyond per-session is needed)
+P4 (future/security/product):
+  17. Rich structured editor + attachment content layer
+  18. iOS only after a reusable native/key/transport composition exists
+  19. Authenticated Ed25519 identity-key rebind/re-verification protocol
+  20. Double Ratchet/session-key evolution only if stronger forward/post-compromise secrecy is required
 ```

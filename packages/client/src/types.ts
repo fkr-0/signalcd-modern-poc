@@ -1,4 +1,11 @@
-import type { TextEdit } from '@e2e-col/core'
+import type {
+  CreateDocumentComment,
+  DocumentAttachment,
+  DocumentBlock,
+  DocumentBlockUpdate,
+  DocumentComment,
+  TextEdit
+} from '@e2e-col/core'
 import type {
   DocumentAccessState,
   DocumentParticipant,
@@ -15,6 +22,15 @@ import type { ObservableCollaborativeTransport, TransportConnectionState } from 
 
 export interface TransportContext {
   readonly documentId: string
+}
+
+export interface OutboundRetryStatus {
+  /** 1-based retry number; 0 after a successful reset. */
+  readonly attempt: number
+  /** True while a retry timer is armed. */
+  readonly active: boolean
+  /** Local clock time when the armed retry becomes eligible. */
+  readonly nextAttemptAt?: number
 }
 
 export interface AuthorizationBootstrapControlEvidence {
@@ -83,6 +99,19 @@ export interface RecoveryPolicy {
   readonly snapshotThresholdOutboundEntries?: number
 }
 
+export interface RetryPolicy {
+  /** Automatic retry is enabled by default for auto-sync sessions. */
+  readonly enabled?: boolean
+  /** Delay before the first retry after a transport send failure. */
+  readonly initialDelayMs?: number
+  /** Upper bound for the exponential retry delay. */
+  readonly maxDelayMs?: number
+  /** Exponential multiplier applied after each failed retry. */
+  readonly multiplier?: number
+  /** Maximum consecutive automatic retries before leaving durable work queued. */
+  readonly maxAttempts?: number
+}
+
 export interface IdentityEnvelopeContext {
   readonly documentId: string
   readonly transport: ObservableCollaborativeTransport
@@ -136,6 +165,7 @@ export interface CollaborativeClientOptions {
   readonly clock?: ClientClock
   readonly ids?: ClientIdFactory
   readonly recovery?: RecoveryPolicy
+  readonly retry?: RetryPolicy
 }
 
 export interface DocumentSummary {
@@ -148,6 +178,9 @@ export interface DocumentSummary {
 export interface DocumentView {
   readonly text: string
   readonly heads: readonly string[]
+  readonly blocks: readonly DocumentBlock[]
+  readonly comments: readonly DocumentComment[]
+  readonly attachments: readonly DocumentAttachment[]
 }
 
 export type SessionPhase =
@@ -192,6 +225,8 @@ export interface SessionStatus {
   readonly pendingOutbound: number
   /** Local replay progress only; completion is not remote acknowledgement. */
   readonly replay?: OutboundReplayProgress
+  /** Local automatic retry state; it is not a peer acknowledgement signal. */
+  readonly retry?: OutboundRetryStatus
   readonly recoveryRequired: boolean
   readonly lastReceivedAt?: number
   readonly lastSentAt?: number
@@ -210,6 +245,15 @@ export type SyncMode = 'auto' | 'manual'
 export interface DocumentSessionCommands {
   editText(nextText: string): Promise<void>
   spliceText(edit: TextEdit): Promise<void>
+  insertBlock(block: DocumentBlock, index?: number): Promise<void>
+  updateBlock(blockId: string, update: DocumentBlockUpdate): Promise<void>
+  moveBlock(blockId: string, toIndex: number): Promise<void>
+  removeBlock(blockId: string): Promise<void>
+  addComment(comment: CreateDocumentComment): Promise<void>
+  resolveComment(commentId: string, resolved?: boolean): Promise<void>
+  removeComment(commentId: string): Promise<void>
+  addAttachment(attachment: DocumentAttachment): Promise<void>
+  removeAttachment(attachmentId: string): Promise<void>
   /** Persist and attempt delivery of a complete mergeable CRDT checkpoint. */
   publishSnapshot(): Promise<void>
   inviteParticipant(phoneNumber: string, role: DocumentRole): Promise<void>

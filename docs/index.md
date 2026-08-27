@@ -148,7 +148,7 @@ flowchart LR
 
 ### Could we release the project?
 
-**Yes, as a technical preview.** Version `0.0.4` should be described as an experimental/research release with reproducible browser, Android-debug, sidecar-source, and API-doc artifacts. It adds the separately bounded PeerJS browser transport proof, but should not claim production security, Signal-equivalent all-peers-offline durability, or completed live Signal qualification.
+**Yes, as a technical preview.** Version `0.0.5` should be described as an experimental/research release with reproducible browser, Android-debug, sidecar-source, and API-doc artifacts. It adds structured CRDT/client operations, bounded durable retry scheduling, stable non-consuming identity metadata lookup, and qualified Android M1 Automerge/restart interoperability on top of the separately bounded PeerJS transport proof, but should not claim production security, Signal-equivalent all-peers-offline durability, native Android E2EE parity, or completed live Signal qualification.
 
 ### Would it run with `signal-cli`?
 

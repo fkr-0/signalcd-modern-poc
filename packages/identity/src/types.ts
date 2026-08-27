@@ -96,10 +96,21 @@ export interface RemoteIdentityBundle {
   readonly remainingPrekeys: number
 }
 
+export interface RemoteIdentityPublicMaterial {
+  readonly userId: string
+  readonly phoneNumber: string
+  readonly displayName?: string
+  readonly identityKeyPublic: string
+  readonly signedPrekeyPublic: string
+  readonly signedPrekeySignature: string
+}
+
 export interface IdentityProvider {
   register(material: RegistrationPublicMaterial): Promise<RegisteredIdentityClaim>
   verifySession(sessionToken: string): Promise<IdentitySessionClaim>
   lookupKeys(phoneNumber: string, sessionToken: string): Promise<RemoteIdentityBundle>
+  /** Stable public identity lookup that must not consume a one-time prekey. */
+  lookupIdentity?(phoneNumber: string, sessionToken: string): Promise<RemoteIdentityPublicMaterial>
   replenishPrekeys(sessionToken: string, oneTimePrekeys: readonly string[]): Promise<number>
   rotateSignedPrekey(
     sessionToken: string,

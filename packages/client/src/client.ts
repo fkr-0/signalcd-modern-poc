@@ -11,14 +11,24 @@ import {
   type CreateDocumentOptions,
   type DocumentSummary,
   MAX_DOCUMENT_TITLE_LENGTH,
+  type RetryPolicy,
   type UpdateDocumentMetadataOptions
 } from './types'
+
+const DEFAULT_RETRY_POLICY = {
+  enabled: true,
+  initialDelayMs: 1_000,
+  maxDelayMs: 30_000,
+  multiplier: 2,
+  maxAttempts: 6
+} as const
 
 export class CollaborativeClient {
   private readonly sessions = new Map<string, DocumentSession>()
   private readonly now: () => number
   private readonly createDocumentId: () => string
   private readonly createMessageId: () => string
+  private readonly retryPolicy: Required<RetryPolicy>
   private closed = false
 
   constructor(private readonly options: CollaborativeClientOptions) {
@@ -26,6 +36,7 @@ export class CollaborativeClient {
     const threshold = options.recovery?.snapshotThresholdOutboundEntries
     if (threshold !== undefined && (!Number.isSafeInteger(threshold) || threshold < 1))
       throw new RangeError('snapshotThresholdOutboundEntries must be a positive safe integer')
+    this.retryPolicy = normalizeRetryPolicy(options.retry)
     this.now = options.clock?.now.bind(options.clock) ?? Date.now
     this.createDocumentId = options.ids?.createDocumentId.bind(options.ids) ?? createId
     this.createMessageId = options.ids?.createMessageId.bind(options.ids) ?? createId
@@ -142,6 +153,7 @@ export class CollaborativeClient {
       replayAttemptedOnReconnect: this.options.recovery?.replayAttemptedOnReconnect ?? true,
       publishSnapshotOnRecoverySignal:
         this.options.recovery?.publishSnapshotOnRecoverySignal ?? true,
+      retryPolicy: this.retryPolicy,
       ...(this.options.recovery?.snapshotThresholdOutboundEntries === undefined
         ? {}
         : {
@@ -163,6 +175,22 @@ export class CollaborativeClient {
   private assertOpen(): void {
     if (this.closed) throw new Error('collaborative client is closed')
   }
+}
+
+export function normalizeRetryPolicy(policy: RetryPolicy | undefined): Required<RetryPolicy> {
+  const normalized = { ...DEFAULT_RETRY_POLICY, ...(policy ?? {}) }
+  if (!Number.isSafeInteger(normalized.initialDelayMs) || normalized.initialDelayMs < 0)
+    throw new RangeError('retry initialDelayMs must be a non-negative safe integer')
+  if (
+    !Number.isSafeInteger(normalized.maxDelayMs) ||
+    normalized.maxDelayMs < normalized.initialDelayMs
+  )
+    throw new RangeError('retry maxDelayMs must be a safe integer >= initialDelayMs')
+  if (!Number.isFinite(normalized.multiplier) || normalized.multiplier < 1)
+    throw new RangeError('retry multiplier must be a finite number >= 1')
+  if (!Number.isSafeInteger(normalized.maxAttempts) || normalized.maxAttempts < 1)
+    throw new RangeError('retry maxAttempts must be a positive safe integer')
+  return normalized
 }
 
 function normalizeCreateMetadata(

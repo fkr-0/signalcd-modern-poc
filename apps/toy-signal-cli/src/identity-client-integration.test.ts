@@ -13,6 +13,29 @@ afterEach(async () => {
 })
 
 describe('IdentityClient + toy identity lifecycle', () => {
+  it('reads stable remote identity metadata without consuming one-time prekeys', async () => {
+    const server = new ToySignalCliServer({ port: 0 })
+    running.push(server)
+    const { baseUrl } = await server.start()
+    const provider = new HttpIdentityProvider({ baseUrl })
+    const aliceClient = new IdentityClient({ provider, storage: new MemoryIdentityStorage() })
+    const bobClient = new IdentityClient({ provider, storage: new MemoryIdentityStorage() })
+    const alice = await aliceClient.register('Stable lookup Alice')
+    const bob = await bobClient.register('Stable lookup Bob')
+
+    expect((await provider.verifySession(bob.sessionToken)).prekeyCount).toBe(10)
+    for (let index = 0; index < 5; index += 1) {
+      const remote = await aliceClient.fetchRemoteIdentityMetadata(bob.phoneNumber, alice)
+      expect(remote.userId).toBe(bob.userId)
+      expect(remote.oneTimePrekey).toBeUndefined()
+    }
+    expect((await provider.verifySession(bob.sessionToken)).prekeyCount).toBe(10)
+
+    const encryptionBundle = await provider.lookupKeys(bob.phoneNumber, alice.sessionToken)
+    expect(encryptionBundle.oneTimePrekey).toBeDefined()
+    expect((await provider.verifySession(bob.sessionToken)).prekeyCount).toBe(9)
+  })
+
   it('rotates the signed prekey and replenishes a depleted one-time pool on session open', async () => {
     let now = 1_700_000_000_000
     const server = new ToySignalCliServer({ port: 0, now: () => now })

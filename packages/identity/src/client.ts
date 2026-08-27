@@ -17,6 +17,7 @@ import type {
   IdentityStorage,
   OneTimePrekey,
   RemoteIdentity,
+  RemoteIdentityPublicMaterial,
   SignedPrekey,
   SignedPrekeyPublicMaterial,
   UserIdentity
@@ -133,6 +134,26 @@ export class IdentityClient {
     localIdentity: UserIdentity
   ): Promise<RemoteIdentity> {
     const bundle = await this.options.provider.lookupKeys(phoneNumber, localIdentity.sessionToken)
+    return this.importRemoteIdentity(bundle)
+  }
+
+  async fetchRemoteIdentityMetadata(
+    phoneNumber: string,
+    localIdentity: UserIdentity
+  ): Promise<RemoteIdentity> {
+    const stableLookup = this.options.provider.lookupIdentity
+    if (!stableLookup) return this.fetchRemoteIdentity(phoneNumber, localIdentity)
+    const bundle = await stableLookup.call(
+      this.options.provider,
+      phoneNumber,
+      localIdentity.sessionToken
+    )
+    return this.importRemoteIdentity(bundle)
+  }
+
+  private async importRemoteIdentity(
+    bundle: RemoteIdentityPublicMaterial & { readonly oneTimePrekey?: string }
+  ): Promise<RemoteIdentity> {
     const identityKeyPublic = await importEd25519Public(bundle.identityKeyPublic)
     const signedPrekeyPublic = await importX25519Public(bundle.signedPrekeyPublic)
     const signatureValid = await crypto.subtle.verify(

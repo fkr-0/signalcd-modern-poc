@@ -6,6 +6,33 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-08-27
+
+### Added
+
+- Additive structured Automerge document operations for blocks, headings, lists, tasks, comments, comment resolution, and attachment metadata, exposed through `DocumentSession` without changing the outer `ProtocolEnvelope` v1 or transport wire formats.
+- Bounded configurable exponential retry scheduling above the durable outbound queue for auto-sync sessions, with explicit scheduler status and cancellation/reset semantics that do not redefine transport handoff as peer acknowledgement.
+- Android M1 cross-runtime Automerge qualification: a canonical TypeScript-compatible empty-document history, checked-in TS snapshot fixture, JVM fixture editing, two independent native-session convergence, and file-backed Room close/reopen continuation coverage.
+- `docs/GETTING-STARTED.md`, a numbered architecture-decision-record set under `docs/adr/`, and `docs/DESKTOP-FEASIBILITY.md` documenting the safe wrapper-only desktop boundary and implementation prerequisites.
+
+### Changed
+
+- Workspace and Android app versions advance to `0.0.5` for the technical-preview release.
+- Stable remote identity/signature/commitment reads now use a non-consuming public-identity lookup when supported; actual recipient encryption continues to consume fresh one-time X25519 prekeys.
+- The roadmap is reconciled to the current implementation state, including qualified Android M1, structured CRDT/client operations, retry policy, desktop feasibility, and an intentionally unimplemented iOS target.
+
+### Fixed
+
+- Android `DocumentSession` no longer creates an incompatible random Automerge bootstrap per fresh replica; new native replicas share the canonical initial text object used by TypeScript, allowing incremental cross-runtime changes to converge.
+- Authorization/identity metadata checks no longer deplete one-time prekey pools merely to read stable Ed25519/signed-prekey material.
+
+### Compatibility and limits
+
+- Long-term Ed25519 identity-key rebinding remains intentionally unsupported until a signed rebind/re-verification transition can preserve R6 commitments and historical signature verification.
+- Android Compose collaboration sending remains disabled until native identity/E2EE parity exists; Android M1 proves lower-layer CRDT/storage interoperability only.
+- Desktop remains feasible but intentionally unscaffolded until renderer-origin/profile/CSP, sidecar supervision, non-secret host configuration, Signal ownership, and acceptance behavior are ratified.
+- Real two-account Signal qualification and PeerJS TURN-required deployment evidence remain external gates; this release does not claim production security or Signal-equivalent durability when all PeerJS participants are offline.
+
 ## [0.0.4] - 2026-08-27
 
 ### Added

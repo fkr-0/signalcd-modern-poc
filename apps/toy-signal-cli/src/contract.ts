@@ -31,6 +31,7 @@ export const MOCK_IDENTITY_ENDPOINTS = {
   register: '/api/v1/identity/register',
   session: '/api/v1/identity/session',
   keyPrefix: '/api/v1/identity/keys/',
+  publicIdentityPrefix: '/api/v1/identity/public/',
   replenish: '/api/v1/identity/keys/replenish',
   rotateSignedPrekey: '/api/v1/identity/keys/signed-prekey'
 } as const

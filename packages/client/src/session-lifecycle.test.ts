@@ -1,7 +1,7 @@
 import type { DocumentParticipant } from '@e2e-col/protocol'
 import { MemoryCollaborativeStorage } from '@e2e-col/storage'
 import { DeterministicTransportNetwork, type SimulatedTransport } from '@e2e-col/transport'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { DocumentSession } from './session'
 import type {
   ClientIdentityAdapter,
@@ -33,7 +33,18 @@ function lifecycleIdentity(): ClientIdentityAdapter {
   }
 }
 
-function createSession(options: { readonly publishSnapshotOnRecoverySignal?: boolean } = {}): {
+function createSession(
+  options: {
+    readonly publishSnapshotOnRecoverySignal?: boolean
+    readonly retryPolicy?: {
+      readonly enabled: boolean
+      readonly initialDelayMs: number
+      readonly maxDelayMs: number
+      readonly multiplier: number
+      readonly maxAttempts: number
+    }
+  } = {}
+): {
   readonly session: DocumentSession
   readonly transport: SimulatedTransport
   readonly storage: MemoryCollaborativeStorage
@@ -54,6 +65,13 @@ function createSession(options: { readonly publishSnapshotOnRecoverySignal?: boo
     allowAuthorizationRootCreation: false,
     replayAttemptedOnReconnect: true,
     publishSnapshotOnRecoverySignal: options.publishSnapshotOnRecoverySignal ?? false,
+    retryPolicy: options.retryPolicy ?? {
+      enabled: true,
+      initialDelayMs: 1_000,
+      maxDelayMs: 30_000,
+      multiplier: 2,
+      maxAttempts: 6
+    },
     onClosed: () => undefined
   })
   return { session, transport, storage }
@@ -189,5 +207,48 @@ describe('DocumentSession lifecycle', () => {
     await expect(session.flush()).rejects.toMatchObject({ code: 'transport-unavailable' })
     expect(session.getStatus().phase).toBe('offline')
     await session.close()
+  })
+
+  it('retries failed auto-sync sends with bounded exponential backoff', async () => {
+    vi.useFakeTimers()
+    try {
+      const { session, transport } = createSession({
+        retryPolicy: {
+          enabled: true,
+          initialDelayMs: 10,
+          maxDelayMs: 40,
+          multiplier: 2,
+          maxAttempts: 3
+        }
+      })
+      await session.open()
+      const send = transport.send.bind(transport)
+      let failuresRemaining = 2
+      transport.send = async (update) => {
+        if (failuresRemaining-- > 0) throw new Error('injected send failure')
+        await send(update)
+      }
+
+      await session.editText('retry me')
+      expect(session.getStatus()).toMatchObject({
+        pendingOutbound: 1,
+        retry: { attempt: 1, active: true }
+      })
+
+      await vi.advanceTimersByTimeAsync(10)
+      expect(session.getStatus()).toMatchObject({
+        pendingOutbound: 1,
+        retry: { attempt: 2, active: true }
+      })
+
+      await vi.advanceTimersByTimeAsync(20)
+      expect(session.getStatus()).toMatchObject({
+        pendingOutbound: 0,
+        retry: { attempt: 0, active: false }
+      })
+      await session.close()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

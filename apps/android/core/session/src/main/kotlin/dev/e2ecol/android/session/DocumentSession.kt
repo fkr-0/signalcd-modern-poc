@@ -18,11 +18,9 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import org.automerge.AmValue
 import org.automerge.ChangeHash
 import org.automerge.Document
 import org.automerge.ObjectId
-import org.automerge.ObjectType
 
 data class SessionState(
     val active: Boolean = false,
@@ -48,17 +46,13 @@ class DocumentSession(
         val existing = runBlocking { db.documentDao().getByDocumentId(documentId) }
         if (existing != null && existing.snapshot.isNotEmpty()) {
             doc = Document.load(existing.snapshot)
-            val textVal = doc.get(ObjectId.ROOT, "text")
-            textObjId = if (textVal.isPresent) {
-                (textVal.get() as AmValue.Text).id
-            } else {
-                throw IllegalStateException("loaded document missing 'text' key")
-            }
+            textObjId = CanonicalAutomerge.textObjectId(doc)
         } else {
-            doc = Document()
-            val tx = doc.startTransaction()
-            textObjId = tx.set(ObjectId.ROOT, "text", ObjectType.TEXT)
-            tx.commit()
+            // Independent replicas must share the same initial Automerge history.
+            // A fresh random JVM document would mint a different text object, making
+            // subsequent incremental changes impossible for TS/other JVM replicas to apply.
+            doc = CanonicalAutomerge.emptyDocument()
+            textObjId = CanonicalAutomerge.textObjectId(doc)
         }
         _state.value = SessionState(active = true)
     }
@@ -162,4 +156,6 @@ class DocumentSession(
     }
 
     fun getSnapshot(): ByteArray = doc.save()
+
+    fun getText(): String = doc.text(textObjId).orElse("")
 }

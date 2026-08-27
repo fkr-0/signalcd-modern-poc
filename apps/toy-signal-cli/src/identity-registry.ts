@@ -173,6 +173,20 @@ export class IdentityRegistry {
     }
   }
 
+  publicIdentity(phoneNumber: string, authorization: string | undefined): Record<string, unknown> {
+    this.authorize(authorization)
+    const record = this.byPhone.get(phoneNumber)
+    if (!record) throw new IdentityApiError(404, `unknown identity ${phoneNumber}`)
+    return {
+      user_id: record.userId,
+      phone_number: record.phoneNumber,
+      display_name: record.displayName,
+      identity_key_public: record.identityKeyPublic,
+      signed_prekey_public: record.signedPrekeyPublic,
+      signed_prekey_signature: record.signedPrekeySignature
+    }
+  }
+
   replenish(
     authorization: string | undefined,
     oneTimePrekeys: readonly string[]
