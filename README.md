@@ -13,7 +13,7 @@ It is **not** an official Signal product and is not affiliated with Signal Messe
 | Project name | **SignalCD Modern PoC** |
 | Repository | `fkr-0/signalcd-modern-poc` |
 | Documentation | <https://signalcd-poc.fkr.dev/> |
-| Current release line | `0.0.3` technical preview |
+| Current release line | `0.0.4` technical preview |
 | Research system | **SignalCD** |
 | Paper | Christian Knabenhans, Zayd Maradni, Carmela Troncoso, _End-to-End Encrypted Collaborative Documents_, USENIX Security 2026 |
 | Upstream research prototype | <https://github.com/spring-epfl/signal-collaborative-documents> |
@@ -30,6 +30,7 @@ The original internal namespace remains visible in compatibility-sensitive ident
 | Browser-owned Ed25519/X25519 application identity + recipient-bound E2EE | Implemented in the current test/toy environment |
 | Authenticated R6 collaboration authorization/fork handling | Implemented in the current trust model |
 | `signal-cli` sidecar adapter | Implemented and contract-tested |
+| Browser-only PeerJS alternative transport | Implemented; encrypted 3-client convergence, late replay, and browser-hub failover qualified against a local PeerServer in Chromium and Firefox |
 | Real two-account Signal collaboration | **Still requires live external qualification** |
 | Android sidecar proxy | Implemented |
 | Android editing the shared encrypted document | **Not yet wired**; native E2EE/Keystore parity remains a gate |
@@ -44,16 +45,21 @@ The detailed state table, architecture diagrams, security boundaries, artifact l
 ```mermaid
 flowchart LR
   A[Browser / client replica] -->|Automerge + ProtocolEnvelope| B[Application E2EE]
-  B -->|opaque binary frames| C[Local sidecar]
+  B -->|opaque binary frames| T{CollaborativeTransport}
+  T -->|WebSocket| C[Local sidecar]
   C -->|JSON-RPC + SSE| D[signal-cli]
   D -->|Signal group messages| E[Signal network]
+  T -->|PeerJsTransport| P[peerjslib browser lobby]
+  P -. signalling .-> S[PeerServer / PeerJS Cloud]
+  P -->|WebRTC DataChannel| P2[peer browser lobby]
   E --> D2[peer signal-cli]
   D2 --> C2[peer sidecar]
   C2 --> B2[peer application E2EE]
+  P2 --> B2
   B2 --> A2[peer replica]
 ```
 
-The sidecar is a transport boundary, not a plaintext merge authority. Browser private application keys remain client-owned; Signal device credentials remain outside browser storage.
+The sidecar and PeerJS lobby are transport boundaries, not plaintext merge or authorization authorities. Browser private application keys remain client-owned; Signal device credentials remain outside browser storage. The PeerJS backend uses [`peerjslib` v0.3.2](https://github.com/fkr-0/peerjslib/releases/tag/v0.3.2) for capability-derived rendezvous, bounded browser-resident replay and hub re-election. Its sender acknowledgement means acceptance by the elected browser hub, not remote merge or third-party durability; if every replay-carrying browser is offline, there is no Signal-equivalent mailbox. See [`docs/PEERJS-TRANSPORT.md`](docs/PEERJS-TRANSPORT.md).
 
 ## Getting started
 

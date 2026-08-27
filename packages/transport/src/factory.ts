@@ -1,5 +1,6 @@
 import { DeterministicTransportNetwork } from './deterministic-network'
 import { MockSignalTransport, type MockSignalTransportOptions } from './mock-signal-transport'
+import { PeerJsTransport, type PeerJsTransportOptions } from './peerjs-transport'
 import type { ObservableCollaborativeTransport } from './types'
 import { type WebSocketFactory, WebSocketTransport } from './websocket-transport'
 
@@ -15,13 +16,14 @@ export interface MockTransportRuntime {
 }
 
 export interface TransportFactoryConfig {
-  readonly type: 'deterministic' | 'mock' | 'websocket'
+  readonly type: 'deterministic' | 'mock' | 'peerjs' | 'websocket'
   readonly mock?: {
     readonly serverUrl: string
     readonly resolveRuntime?: (context: TransportFactoryContext) => MockTransportRuntime
     readonly socketFactory?: WebSocketFactory
     readonly ackTimeoutMs?: number
   }
+  readonly peerjs?: PeerJsTransportOptions
   readonly websocket?: {
     readonly url: string
     readonly socketFactory?: WebSocketFactory
@@ -40,6 +42,12 @@ export function createTransportFactory(config: TransportFactoryConfig): Transpor
       sequence += 1
       return network.createTransport(`${documentId}:${sequence}`)
     }
+  }
+
+  if (config.type === 'peerjs') {
+    const peerjs = config.peerjs
+    if (!peerjs) throw new TypeError('peerjs transport requires peerjs configuration')
+    return () => new PeerJsTransport(peerjs)
   }
 
   if (config.type === 'websocket') {

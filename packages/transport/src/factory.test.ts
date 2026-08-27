@@ -1,7 +1,9 @@
+import { FakePeerNetwork } from 'peerjslib/testing'
 import { describe, expect, it } from 'vitest'
 import { SimulatedTransport } from './deterministic-network'
 import { createTransportFactory } from './factory'
 import { MockSignalTransport } from './mock-signal-transport'
+import { PeerJsTransport } from './peerjs-transport'
 import { WebSocketTransport } from './websocket-transport'
 
 describe('createTransportFactory', () => {
@@ -19,6 +21,32 @@ describe('createTransportFactory', () => {
     await second.connect('doc')
     await first.send(new Uint8Array([1, 2, 3]))
     expect(received).toEqual([[1, 2, 3]])
+  })
+
+  it('creates peerjs transports from one shared injected PeerJS network', async () => {
+    const network = new FakePeerNetwork()
+    const factory = createTransportFactory({
+      type: 'peerjs',
+      peerjs: {
+        rendezvousSecret: '0123456789abcdef0123456789abcdef',
+        peerFactory: network,
+        lobby: { ackTimeoutMs: 100, reconnectJitterRatio: 0 }
+      }
+    })
+    const first = factory({ documentId: 'doc' })
+    const second = factory({ documentId: 'doc' })
+    expect(first).toBeInstanceOf(PeerJsTransport)
+    expect(second).toBeInstanceOf(PeerJsTransport)
+
+    const received: number[][] = []
+    second.subscribe((bytes) => received.push([...bytes]))
+    await first.connect('doc')
+    await second.connect('doc')
+    await first.send(new Uint8Array([4, 5, 6]))
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    expect(received).toEqual([[4, 5, 6]])
+    await first.close()
+    await second.close()
   })
 
   it('creates websocket transports from config', () => {
@@ -48,6 +76,7 @@ describe('createTransportFactory', () => {
   })
 
   it('fails early for incomplete backend configuration', () => {
+    expect(() => createTransportFactory({ type: 'peerjs' })).toThrow('peerjs configuration')
     expect(() => createTransportFactory({ type: 'websocket' })).toThrow('websocket.url')
     const factory = createTransportFactory({ type: 'mock', mock: { serverUrl: 'ws://localhost' } })
     expect(() => factory({ documentId: 'doc' })).toThrow('identity runtime binding')

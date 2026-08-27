@@ -25,6 +25,8 @@ export {
   encodeMockSignalFanoutFrame,
   MockSignalTransport
 } from './mock-signal-transport'
+export type { PeerJsTransportOptions } from './peerjs-transport'
+export { PeerJsTransport } from './peerjs-transport'
 export type {
   CollaborativeTransport,
   ObservableCollaborativeTransport,

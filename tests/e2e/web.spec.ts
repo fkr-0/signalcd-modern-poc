@@ -109,8 +109,8 @@ async function storedIdentity(page: Page): Promise<StoredIdentityClaim> {
         request.onsuccess = () => resolve(request.result as T[])
         request.onerror = () => reject(request.error ?? new Error(`failed to read ${store}`))
       })
-    const identities = await readAll<{ userId: string; phoneNumber: string }>('identities')
-    const sessions = await readAll<{ userId: string; sessionToken: string }>('sessions')
+    const identities = await readAll<{ userId: string; phoneNumber: string }>('identities_v2')
+    const sessions = await readAll<{ userId: string; sessionToken: string }>('sessions_v2')
     db.close()
     if (
       identities.length !== 1 ||

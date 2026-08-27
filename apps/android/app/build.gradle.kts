@@ -11,8 +11,8 @@ android {
         applicationId = "dev.e2ecol.android"
         minSdk = 23
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.0.3"
+        versionCode = 4
+        versionName = "0.0.4"
     }
 
     compileOptions {

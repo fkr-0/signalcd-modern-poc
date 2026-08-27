@@ -132,7 +132,7 @@ flowchart LR
 
 ### Could we release the project?
 
-**Yes, as a technical preview.** Version `0.0.3` should be described as an experimental/research release with reproducible browser, Android-debug, sidecar-source, and API-doc artifacts. It should not claim production security or completed live Signal qualification.
+**Yes, as a technical preview.** Version `0.0.4` should be described as an experimental/research release with reproducible browser, Android-debug, sidecar-source, and API-doc artifacts. It adds the separately bounded PeerJS browser transport proof, but should not claim production security, Signal-equivalent all-peers-offline durability, or completed live Signal qualification.
 
 ### Would it run with `signal-cli`?
 

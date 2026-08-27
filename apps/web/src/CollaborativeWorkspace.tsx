@@ -26,6 +26,7 @@ import { addGroupMember, createBrowserIdentityAdapter } from './client-adapter'
 import { Dashboard } from './Dashboard'
 import { InspectorEventStore, instrumentTransportFactory } from './inspector-events'
 import { syncPresentation } from './offline-status'
+import { peerJsTransportOptions } from './peerjs-config'
 import { SyncLogPanel } from './SyncLogPanel'
 
 const defaultDocumentId = '11111111-1111-4111-8111-111111111111'
@@ -752,6 +753,30 @@ function createBrowserTransportFactory(
 ): TransportFactory {
   const type = resolveTransportType(groupId, configuredTransport)
   if (type === 'deterministic') return createTransportFactory({ type: 'deterministic' })
+  if (type === 'peerjs') {
+    if (!groupId)
+      throw new Error(
+        'peerjs transport requires a group query parameter for encrypted collaboration'
+      )
+    return createTransportFactory({
+      type: 'peerjs',
+      peerjs: {
+        ...peerJsTransportOptions(
+          {
+            VITE_E2E_COL_PEERJS_RENDEZVOUS_SECRET: import.meta.env
+              .VITE_E2E_COL_PEERJS_RENDEZVOUS_SECRET,
+            VITE_E2E_COL_PEERJS_HOST: import.meta.env.VITE_E2E_COL_PEERJS_HOST,
+            VITE_E2E_COL_PEERJS_PORT: import.meta.env.VITE_E2E_COL_PEERJS_PORT,
+            VITE_E2E_COL_PEERJS_PATH: import.meta.env.VITE_E2E_COL_PEERJS_PATH,
+            VITE_E2E_COL_PEERJS_KEY: import.meta.env.VITE_E2E_COL_PEERJS_KEY,
+            VITE_E2E_COL_PEERJS_SECURE: import.meta.env.VITE_E2E_COL_PEERJS_SECURE
+          },
+          window.location.hash
+        ),
+        recipientPhoneNumber: identity.phoneNumber
+      }
+    })
+  }
   if (type === 'websocket') {
     if (!sidecarUrl) throw new Error('VITE_E2E_COL_SIDECAR_URL is required for websocket transport')
     return createTransportFactory({ type: 'websocket', websocket: { url: sidecarUrl } })
@@ -784,7 +809,11 @@ function workspaceBinding(): WorkspaceBinding {
 function resolveTransportType(
   groupId: string | undefined,
   configuredTransport: string | undefined
-): 'deterministic' | 'mock' | 'websocket' {
+): 'deterministic' | 'mock' | 'peerjs' | 'websocket' {
+  // PeerJS is an encrypted group collaboration backend. Before a document is
+  // group-bound (identity setup/local library), keep the established local
+  // deterministic transport instead of opening an unauthenticated lobby.
+  if (configuredTransport === 'peerjs') return groupId ? 'peerjs' : 'deterministic'
   if (
     configuredTransport === 'deterministic' ||
     configuredTransport === 'mock' ||
@@ -802,6 +831,7 @@ function transportDescription(
 ): string {
   const type = resolveTransportType(groupId, configuredTransport)
   if (type === 'mock') return 'Encrypted mock Signal group'
+  if (type === 'peerjs') return 'Encrypted PeerJS Signal-semantics demo'
   if (type === 'websocket') return 'Signal sidecar'
   return 'Local deterministic transport'
 }

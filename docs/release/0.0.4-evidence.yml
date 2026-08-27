@@ -1,0 +1,109 @@
+release:
+  project: SignalCD Modern PoC
+  repository: fkr-0/signalcd-modern-poc
+  version: 0.0.4
+  proposed_tag: v0.0.4
+  tag_created: false
+  channel: technical-preview
+  branch: ci/webkit-diagnose
+  base_revision_before_candidate: c75777a62317ad504b17f07417bd178e88bfc487
+  protocol_envelope: v1
+  peerjslib:
+    version: 0.3.2
+    revision: 6529ef70f3d4b18581a98a7250ef5144b24cdecf
+
+scope:
+  included:
+    - browser-only PeerJsTransport over peerjslib with capability-derived document rendezvous
+    - recipient fan-out selection while preserving application-owned E2EE and authorization
+    - bounded replay-gap/checkpoint-request recovery semantics
+    - Chromium and Firefox local-PeerServer encrypted convergence, late join and hub failover qualification
+    - root README, architecture and dedicated PeerJS transport documentation
+    - IndexedDB schema-v2 browser E2E helper alignment
+    - root Vitest node_modules test-discovery exclusion
+    - synchronized 0.0.4 workspace and Android app version metadata
+  explicitly_excluded_from_candidate_commit:
+    - inherited Android protocol parity source/test edits already dirty before this track
+    - inherited docs/ROADMAP.md edits
+    - inherited docs/android-integration.md edits
+    - inherited packages/protocol/src/protocol.test.ts edits
+  explicitly_not_claimed:
+    - Signal-equivalent durability while every browser participant is offline
+    - TURN-relay-required NAT qualification
+    - real two-account Signal qualification
+    - production identity directory/freshness service
+    - Android shared-document production sends
+    - production-ready security claim
+
+verification:
+  workspace_check:
+    command: pnpm check
+    result: pass
+    version_check: '0.0.4 / 10 workspaces synchronized'
+    biome_files: 142
+    vitest_files_passed: 41
+    vitest_files_skipped: 1
+    vitest_tests_passed: 308
+    vitest_tests_skipped: 1
+    skipped_test: apps/sidecar/src/real-signal.smoke.test.ts
+    production_web_build: pass
+  peerjs_browser_e2e:
+    command: pnpm test:e2e:peerjs
+    result: pass
+    tests: 2
+    browsers:
+      chromium: 'pass, 56.0s'
+      firefox: 'pass, 20.7s'
+    behaviors:
+      - three encrypted independent browser contexts converge
+      - late participant receives retained replay
+      - elected browser hub loss is detected and survivors reconnect/re-elect
+      - post-loss edit converges
+      - toy Signal message store does not carry document ciphertext
+  existing_browser_e2e_chromium_firefox:
+    command: pnpm exec playwright test --project=chromium --project=firefox
+    result: pass
+    tests: 14
+    note: stale test helper was corrected from removed v1 identity stores to identities_v2/sessions_v2 before this passing run
+  local_webkit:
+    command: pnpm test:e2e
+    result: environment_blocked
+    reason: Playwright WebKit cannot launch on this Arch host because libicu74/libxml2/libflite1 runtime dependencies are unavailable
+    source_failures_after_helper_fix: not_observed
+    ci_contract: '.github/workflows/ci.yml and release.yml install chromium/firefox/webkit with --with-deps before E2E'
+  android_core:
+    command: 'JAVA_HOME=/usr/lib/jvm/java-17-openjdk GRADLE_USER_HOME=$PWD/apps/android/.gradle/release-user-home-004 pnpm run android:check'
+    result: pass
+    gradle: 9.3.1
+    note: pre-existing warning reports Kotlin Gradle plugin loaded in multiple subprojects
+  api_docs:
+    command: pnpm api:docs
+    result: pass
+    output: build/api-docs
+  workflow_lint:
+    command: actionlint .github/workflows/*.yml
+    result: pass
+    note: workflows were not modified by this candidate
+  diff_check:
+    command: git diff --check
+    result: pass
+
+known_environment_limitations:
+  local_webkit:
+    status: unavailable_on_host
+    release_gate: GitHub CI with Playwright --with-deps
+  local_android_app_assemble:
+    status: not_rerun_for_candidate
+    reason: tagged workflow provisions Android API 36 and Build Tools 36.0.0 explicitly; Android core JVM checks pass locally
+  real_signal:
+    status: pending_external_validation
+    experiment: docs/SIGNALCLI-EXPERIMENT.md
+  turn_relay:
+    status: pending_deployment_evidence
+
+publication_plan:
+  requested_side_effect: publish this evidence with the 0.0.4 candidate commit on the current remote branch
+  candidate_commit: this evidence file is part of the candidate commit
+  tag_status: not_created
+  release_status: not_created
+  tag_policy: create v0.0.4 only after the committed candidate passes the mandatory GitHub CI matrix including WebKit and Android assembly
