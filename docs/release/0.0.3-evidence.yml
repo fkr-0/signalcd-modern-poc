@@ -102,6 +102,37 @@ known_environment_limitations:
     signal_cli_compatibility_reference: 0.14.7
     experiment: docs/SIGNALCLI-EXPERIMENT.md
 
+requalification_2026_09_04:
+  candidate_revision: b9a91aeb4c3ae2653c55fc8db8324d6dfd21ca68
+  reason: public v0.0.3 metadata existed on main while the remote tag set still stopped at v0.0.2
+  release_decision: 0.0.3 remains warranted; do not downgrade README metadata
+  clean_install:
+    command: pnpm install --frozen-lockfile
+    result: pass
+    correction: root devDependency ws@^8.21.3 is now declared for the top-level E2EE integration test
+  workspace_check:
+    command: pnpm run check
+    result: pass
+    version_check: '0.0.3 / 10 workspaces synchronized'
+    biome_files: 136
+    vitest_files_passed: 114
+    vitest_files_skipped: 1
+    vitest_tests_passed: 1156
+    vitest_tests_skipped: 1
+    skipped_test: apps/sidecar/src/real-signal.smoke.test.ts
+    production_web_build: pass
+  scope_guard:
+    core_e2ee_implementation_changed: false
+    changed_release_files:
+      - package.json
+      - pnpm-lock.yaml
+      - CHANGELOG.md
+  publication:
+    push: not_requested
+    remote_tag_before_publication: v0.0.2
+    v0_0_3_tag: not_created
+    blocker: repository policy requires committed main to pass GitHub CI before creating v0.0.3; the requalification commit has not been pushed
+
 publication_plan:
   github_repository: https://github.com/fkr-0/signalcd-modern-poc
   documentation: https://signalcd-poc.fkr.dev/
