@@ -36,6 +36,7 @@
     "@playwright/test": "^1.62.1",
     "fake-indexeddb": "^6.2.5",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "ws": "^8.21.3"
   }
 }

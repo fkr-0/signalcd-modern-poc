@@ -144,6 +144,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
+- The workspace root now declares its direct `ws` test dependency, so clean `pnpm install --frozen-lockfile` environments can collect and run the top-level E2EE integration suite instead of depending on incidental transitive installation state.
 - Android sidecar explicit-close handling now suppresses a late WebSocket `onOpen` callback at the listener/UI boundary as well as the internal connection state, preventing a closed connection from being presented as online.
 - Canonical empty Automerge bootstrap now pins its fixed actor's initial change to
   timestamp 0. Independent browser contexts therefore derive identical bootstrap
