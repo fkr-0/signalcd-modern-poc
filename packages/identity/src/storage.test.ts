@@ -47,7 +47,147 @@ describe('IndexedDbIdentityStorage key lifecycle', () => {
     ])
     await storage.close()
   })
+
+  it('wraps storage-created X25519 keys and restores non-extractable runtime keys', async () => {
+    const name = `identity-wrapped-x25519-${crypto.randomUUID()}`
+    const storage = new IndexedDbIdentityStorage({ indexedDB: fakeIndexedDb, name })
+    const signedPair = await storage.createX25519KeyPair()
+    const oneTimePair = await storage.createX25519KeyPair()
+    const identity: UserIdentity = {
+      userId: '10000000-0000-4000-8000-000000000456',
+      phoneNumber: '+15550000456',
+      displayName: 'Wrapped fixture',
+      identityKeyPair: await ed25519(),
+      signedPrekeyPair: { ...signedPair, keyId: 'wrapped-signed', createdAt: 100 },
+      retiredSignedPrekeys: [],
+      oneTimePrekeys: [
+        { ...oneTimePair, keyId: 'wrapped-one-time', createdAt: 101, publishedAt: 102 }
+      ],
+      sessionToken: 'wrapped-session-token',
+      createdAt: 90
+    }
+
+    await storage.saveLocalIdentity(identity)
+    await storage.close()
+
+    const reopened = new IndexedDbIdentityStorage({ indexedDB: fakeIndexedDb, name })
+    const loaded = await reopened.loadLocalIdentity()
+    expect(await exportRawKey(loaded!.signedPrekeyPair.publicKey)).toBe(
+      await exportRawKey(signedPair.publicKey)
+    )
+    expect(loaded!.signedPrekeyPair.privateKey.extractable).toBe(false)
+    expect(await exportRawKey(loaded!.oneTimePrekeys[0]!.publicKey)).toBe(
+      await exportRawKey(oneTimePair.publicKey)
+    )
+    expect(loaded!.oneTimePrekeys[0]!.privateKey.extractable).toBe(false)
+    await reopened.close()
+
+    const db = await openDatabase(name)
+    expect(await requestAll(db, 'wrapped_keypairs_v3')).toHaveLength(2)
+    expect(await requestAll(db, 'keypairs_v2')).toHaveLength(1)
+    db.close()
+  })
+
+  it('migrates v1 inline-key stores to out-of-line keys without losing private key material', async () => {
+    const name = `identity-v1-migration-${crypto.randomUUID()}`
+    const identityKeyPair = await ed25519()
+    const signed = await signedPrekey('legacy-signed', 100)
+    const legacy = await openLegacyDatabase(name)
+    const tx = legacy.transaction(['identities', 'keypairs', 'sessions'], 'readwrite')
+    tx.objectStore('identities').put({
+      userId: '10000000-0000-4000-8000-000000000321',
+      phoneNumber: '+15550000321',
+      displayName: 'Legacy fixture',
+      createdAt: 90
+    })
+    tx.objectStore('keypairs').put({
+      keyId: 'identity',
+      userId: '10000000-0000-4000-8000-000000000321',
+      type: 'identity',
+      publicKey: identityKeyPair.publicKey,
+      privateKey: identityKeyPair.privateKey,
+      createdAt: 90
+    })
+    tx.objectStore('keypairs').put({
+      keyId: signed.keyId,
+      userId: '10000000-0000-4000-8000-000000000321',
+      type: 'signed_pre',
+      publicKey: signed.publicKey,
+      privateKey: signed.privateKey,
+      createdAt: signed.createdAt
+    })
+    tx.objectStore('sessions').put({
+      userId: '10000000-0000-4000-8000-000000000321',
+      sessionToken: 'legacy-session-token'
+    })
+    await transactionComplete(tx)
+    legacy.close()
+
+    const storage = new IndexedDbIdentityStorage({ indexedDB: fakeIndexedDb, name })
+    const loaded = await storage.loadLocalIdentity()
+    expect(loaded).toMatchObject({
+      userId: '10000000-0000-4000-8000-000000000321',
+      phoneNumber: '+15550000321',
+      displayName: 'Legacy fixture',
+      sessionToken: 'legacy-session-token'
+    })
+    expect(await exportRawKey(loaded!.identityKeyPair.publicKey)).toBe(
+      await exportRawKey(identityKeyPair.publicKey)
+    )
+    expect(await exportRawKey(loaded!.signedPrekeyPair.publicKey)).toBe(
+      await exportRawKey(signed.publicKey)
+    )
+    await storage.close()
+
+    const migrated = await openDatabase(name)
+    expect(migrated.transaction('identities_v2').objectStore('identities_v2').keyPath).toBeNull()
+    expect(migrated.transaction('keypairs_v2').objectStore('keypairs_v2').keyPath).toBeNull()
+    expect(
+      migrated.transaction('remote_identities_v2').objectStore('remote_identities_v2').keyPath
+    ).toBeNull()
+    expect(migrated.transaction('sessions_v2').objectStore('sessions_v2').keyPath).toBeNull()
+    migrated.close()
+  })
 })
+
+async function openLegacyDatabase(name: string): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = fakeIndexedDb.open(name, 1)
+    request.onupgradeneeded = () => {
+      const db = request.result
+      db.createObjectStore('identities', { keyPath: 'userId' })
+      db.createObjectStore('keypairs', { keyPath: 'keyId' })
+      db.createObjectStore('remote_identities', { keyPath: 'userId' })
+      db.createObjectStore('sessions', { keyPath: 'userId' })
+    }
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+}
+
+async function openDatabase(name: string): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = fakeIndexedDb.open(name)
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+}
+
+async function requestAll(db: IDBDatabase, storeName: string): Promise<unknown[]> {
+  return new Promise((resolve, reject) => {
+    const request = db.transaction(storeName).objectStore(storeName).getAll()
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+}
+
+async function transactionComplete(tx: IDBTransaction): Promise<void> {
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+    tx.onabort = () => reject(tx.error)
+  })
+}
 
 async function ed25519(): Promise<CryptoKeyPair> {
   return crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify'])

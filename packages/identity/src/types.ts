@@ -113,5 +113,11 @@ export interface IdentityStorage {
   deleteLocalIdentity(): Promise<void>
   loadRemoteIdentity(userId: string): Promise<RemoteIdentity | undefined>
   saveRemoteIdentity(identity: RemoteIdentity): Promise<void>
+  /**
+   * Optional persistence-aware X25519 factory. Browser storage implementations
+   * may use this to prepare durable wrapped private material while returning a
+   * non-extractable runtime key.
+   */
+  createX25519KeyPair?(): Promise<IdentityKeyPair>
   close(): Promise<void>
 }
