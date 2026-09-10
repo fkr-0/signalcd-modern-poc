@@ -7,13 +7,14 @@ import type {
   UserIdentity
 } from './types'
 
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 const IDENTITIES = 'identities_v2'
 const KEYPAIRS = 'keypairs_v2'
 const REMOTE_IDENTITIES = 'remote_identities_v2'
 const SESSIONS = 'sessions_v2'
 const WRAPPED_KEYPAIRS = 'wrapped_keypairs_v3'
 const WRAPPING_KEYS = 'wrapping_keys_v3'
+const SERIALIZED_REMOTE_IDENTITIES = 'remote_identities_v3'
 const WRAPPING_KEY_ID = 'x25519-aes-gcm-v1'
 const LEGACY_IDENTITIES = 'identities'
 const LEGACY_KEYPAIRS = 'keypairs'
@@ -25,6 +26,75 @@ interface StoredIdentityMetadata {
   readonly phoneNumber: string
   readonly displayName: string
   readonly createdAt: number
+}
+
+interface StoredRemoteIdentity {
+  readonly userId: string
+  readonly phoneNumber: string
+  readonly displayName?: string
+  readonly identityKeyRaw: Uint8Array<ArrayBuffer>
+  readonly signedPrekeyRaw: Uint8Array<ArrayBuffer>
+  readonly oneTimePrekeyRaw?: Uint8Array<ArrayBuffer>
+  readonly verified: boolean
+  readonly fetchedAt: number
+}
+
+async function serializeRemoteIdentity(identity: RemoteIdentity): Promise<StoredRemoteIdentity> {
+  return {
+    userId: identity.userId,
+    phoneNumber: identity.phoneNumber,
+    ...(identity.displayName === undefined ? {} : { displayName: identity.displayName }),
+    identityKeyRaw: new Uint8Array(
+      await crypto.subtle.exportKey('raw', identity.identityKeyPublic)
+    ),
+    signedPrekeyRaw: new Uint8Array(
+      await crypto.subtle.exportKey('raw', identity.signedPrekeyPublic)
+    ),
+    ...(identity.oneTimePrekey === undefined
+      ? {}
+      : {
+          oneTimePrekeyRaw: new Uint8Array(
+            await crypto.subtle.exportKey('raw', identity.oneTimePrekey)
+          )
+        }),
+    verified: identity.verified,
+    fetchedAt: identity.fetchedAt
+  }
+}
+
+async function deserializeRemoteIdentity(identity: StoredRemoteIdentity): Promise<RemoteIdentity> {
+  return {
+    userId: identity.userId,
+    phoneNumber: identity.phoneNumber,
+    ...(identity.displayName === undefined ? {} : { displayName: identity.displayName }),
+    identityKeyPublic: await crypto.subtle.importKey(
+      'raw',
+      identity.identityKeyRaw,
+      { name: 'Ed25519' },
+      true,
+      ['verify']
+    ),
+    signedPrekeyPublic: await crypto.subtle.importKey(
+      'raw',
+      identity.signedPrekeyRaw,
+      { name: 'X25519' },
+      true,
+      []
+    ),
+    ...(identity.oneTimePrekeyRaw === undefined
+      ? {}
+      : {
+          oneTimePrekey: await crypto.subtle.importKey(
+            'raw',
+            identity.oneTimePrekeyRaw,
+            { name: 'X25519' },
+            true,
+            []
+          )
+        }),
+    verified: identity.verified,
+    fetchedAt: identity.fetchedAt
+  }
 }
 
 function asKeyPair(value: CryptoKeyPair): CryptoKeyPair {
@@ -314,15 +384,28 @@ export class IndexedDbIdentityStorage implements IdentityStorage {
 
   async loadRemoteIdentity(userId: string): Promise<RemoteIdentity | undefined> {
     const db = await this.dbPromise
-    return request<RemoteIdentity | undefined>(
+    const serialized = await request<StoredRemoteIdentity | undefined>(
+      db
+        .transaction(SERIALIZED_REMOTE_IDENTITIES)
+        .objectStore(SERIALIZED_REMOTE_IDENTITIES)
+        .get(userId)
+    )
+    if (serialized) return deserializeRemoteIdentity(serialized)
+    const legacy = await request<RemoteIdentity | null | undefined>(
       db.transaction(REMOTE_IDENTITIES).objectStore(REMOTE_IDENTITIES).get(userId)
     )
+    return legacy ?? undefined
   }
 
   async saveRemoteIdentity(identity: RemoteIdentity): Promise<void> {
     const db = await this.dbPromise
-    const tx = db.transaction(REMOTE_IDENTITIES, 'readwrite')
-    tx.objectStore(REMOTE_IDENTITIES).put(identity, identity.userId)
+    // Export public material before creating the IndexedDB transaction. WebCrypto
+    // promises may cross a task boundary, which can make an otherwise idle IDB
+    // transaction inactive in WebKit before the put() call runs.
+    const serialized = await serializeRemoteIdentity(identity)
+    const tx = db.transaction([REMOTE_IDENTITIES, SERIALIZED_REMOTE_IDENTITIES], 'readwrite')
+    tx.objectStore(REMOTE_IDENTITIES).delete(identity.userId)
+    tx.objectStore(SERIALIZED_REMOTE_IDENTITIES).put(serialized, identity.userId)
     await complete(tx)
   }
 
@@ -492,6 +575,8 @@ function openDatabase(factory: IDBFactory, name: string): Promise<IDBDatabase> {
       migrateToOutOfLineStore(db, tx, LEGACY_SESSIONS, SESSIONS)
       if (!db.objectStoreNames.contains(WRAPPED_KEYPAIRS)) db.createObjectStore(WRAPPED_KEYPAIRS)
       if (!db.objectStoreNames.contains(WRAPPING_KEYS)) db.createObjectStore(WRAPPING_KEYS)
+      if (!db.objectStoreNames.contains(SERIALIZED_REMOTE_IDENTITIES))
+        db.createObjectStore(SERIALIZED_REMOTE_IDENTITIES)
     }
     value.onsuccess = () => resolve(value.result)
     value.onerror = () => reject(value.error ?? new Error('identity IndexedDB open failed'))

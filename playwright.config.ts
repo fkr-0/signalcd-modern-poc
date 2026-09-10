@@ -1,10 +1,18 @@
 import { defineConfig, devices } from '@playwright/test'
 
 const toyPort = process.env.E2E_COL_TEST_TOY_PORT ?? '18080'
-if (!/^\d{1,5}$/.test(toyPort) || Number(toyPort) < 1 || Number(toyPort) > 65535)
-  throw new Error('E2E_COL_TEST_TOY_PORT must be a TCP port between 1 and 65535')
+const webPort = process.env.E2E_COL_TEST_WEB_PORT ?? '4174'
+for (const [name, value] of [
+  ['E2E_COL_TEST_TOY_PORT', toyPort],
+  ['E2E_COL_TEST_WEB_PORT', webPort]
+] as const) {
+  if (!/^\d{1,5}$/.test(value) || Number(value) < 1 || Number(value) > 65535)
+    throw new Error(`${name} must be a TCP port between 1 and 65535`)
+}
 const toyBaseUrl = `http://127.0.0.1:${toyPort}`
 const toyWebSocketUrl = `ws://127.0.0.1:${toyPort}/api/v1/messages`
+const webBaseUrl = `http://127.0.0.1:${webPort}`
+const reuseExistingServer = process.env.E2E_COL_TEST_REUSE_SERVERS === '1' || !process.env.CI
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -15,7 +23,7 @@ export default defineConfig({
   workers: 1,
   reporter: 'list',
   use: {
-    baseURL: 'http://127.0.0.1:4174',
+    baseURL: webBaseUrl,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure'
   },
@@ -37,12 +45,12 @@ export default defineConfig({
     {
       command: `TOY_SIGNAL_CLI_PORT=${toyPort} pnpm --filter @e2e-col/toy-signal-cli dev`,
       url: `${toyBaseUrl}/api/v1/check`,
-      reuseExistingServer: !process.env.CI
+      reuseExistingServer
     },
     {
-      command: `VITE_E2E_COL_IDENTITY_URL=${toyBaseUrl} VITE_E2E_COL_MOCK_SIGNAL_URL=${toyWebSocketUrl} pnpm --filter @e2e-col/web build && pnpm --filter @e2e-col/web exec vite preview --host 127.0.0.1 --port 4174`,
-      url: 'http://127.0.0.1:4174',
-      reuseExistingServer: !process.env.CI
+      command: `VITE_E2E_COL_IDENTITY_URL=${toyBaseUrl} VITE_E2E_COL_MOCK_SIGNAL_URL=${toyWebSocketUrl} pnpm --filter @e2e-col/web build && pnpm --filter @e2e-col/web exec vite preview --host 127.0.0.1 --port ${webPort} --strictPort`,
+      url: webBaseUrl,
+      reuseExistingServer
     }
   ]
 })
