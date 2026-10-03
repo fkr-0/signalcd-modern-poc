@@ -26,21 +26,18 @@ paper and keeps edit semantics independent from the cryptographic transport.
 │                          │              └─ IndexedDB       │
 │                          ▼                                 │
 │                  CollaborativeTransport                   │
-└──────────────────────────┬───────────────────────────────┘
-                           │
-                      localhost API
-                           │
-┌──────────────────────────▼───────────────────────────────┐
-│ Signal sidecar                                           │
-│                                                          │
-│  envelope validation + base64 Signal framing             │
-│  dedup / chunking / bounded send retry                   │
-│  signal-cli HTTP JSON-RPC + SSE receive stream           │
-└──────────────────────────┬───────────────────────────────┘
-                           │
-                      Signal group
-                           │
-                     other replicas
+└──────────────┬───────────────────────────┬───────────────┘
+               │ WebSocket                 │ PeerJsTransport
+               ▼                           ▼
+┌───────────────────────────┐   ┌───────────────────────────┐
+│ Signal sidecar            │   │ peerjslib PeerJsLobby     │
+│ validation / retry        │   │ bounded replay / hub      │
+│ signal-cli JSON-RPC + SSE │   │ election / recovery       │
+└──────────────┬────────────┘   └─────────────┬─────────────┘
+               │                              │ WebRTC DataChannel
+          Signal group                  peer browser replicas
+               │                              ▲
+          other replicas        PeerServer ─ ─┘ signalling only
 ```
 
 ## Frontend transport contract
@@ -58,7 +55,19 @@ Implemented adapters:
 
 1. deterministic/loopback transports for local development and fault testing;
 2. `WebSocketTransport` for browser-to-sidecar communication;
-3. Future encrypted broadcast transports without changing editor code.
+3. `PeerJsTransport`, a browser-to-browser alternative using `peerjslib` v0.3.2 with capability-derived document rooms, recipient fan-out selection, bounded replay and browser-hub failover.
+
+The transport contract does not imply identical durability. The Signal path can use a service-backed asynchronous mailbox; the PeerJS path is live P2P with browser-resident bounded replay. `send()` on PeerJS means acceptance by the elected browser hub, not remote CRDT merge or third-party durable storage. If every replay-carrying browser goes offline, no PeerJS mailbox remains.
+
+### PeerJS alternative transport
+
+`PeerJsTransport` keeps encryption, authorization and durable local replay above the transport boundary. The browser identity adapter still produces recipient-bound application ciphertext; the PeerJS adapter selects the local recipient from the existing fan-out frame before delivering bytes to `DocumentSession`. `peerjslib` remains unaware of document plaintext, identity keys, ACL state and CRDT semantics.
+
+Rendezvous uses invitation-grade capability material rather than the public document or group UUID. The capability is domain-separated with the document ID before `peerjslib` derives a bounded room identifier. PeerJS peer IDs are routing identifiers only and are never treated as authenticated collaboration identity.
+
+The elected browser hub retains a bounded observed replay window. A receiver whose cursor falls behind that window enters recovery and emits a transport-internal checkpoint request; the receiver does not publish its incomplete local snapshot. Healthy writable replicas may answer with an authenticated full snapshot, so repair authority remains at the application authorization layer rather than being granted to the temporary hub.
+
+Real local-PeerServer Playwright qualification covers Chromium and Firefox with three independent browser contexts: encrypted convergence, late-join replay, hub disappearance, survivor re-election/reconnect, and a post-loss edit. Chromium may rely on the default heartbeat/stale detector when WebRTC does not promptly surface hub-tab closure; current `peerjslib` defaults are a 10 s heartbeat and 30 s stale threshold. TURN-required NAT traversal remains separate deployment evidence.
 
 ## Offline-first status authority
 
@@ -222,11 +231,18 @@ frontend:
   ui: React
   reconciliation: Automerge
   persistence: @e2e-col/storage IndexedDB adapter
-sidecar:
-  runtime: Node.js LTS
-  language: TypeScript
-  browser_transport: WebSocket
-  signal_boundary: signal-cli daemon HTTP JSON-RPC + SSE event stream
+transports:
+  signal_sidecar:
+    runtime: Node.js LTS
+    language: TypeScript
+    browser_transport: WebSocket
+    signal_boundary: signal-cli daemon HTTP JSON-RPC + SSE event stream
+  peerjs_demo:
+    browser_transport: PeerJsTransport
+    lobby: peerjslib v0.3.2
+    signalling: PeerServer or PeerJS Cloud
+    data_path: WebRTC DataChannel
+    durability: bounded while replay-carrying peers remain online
 protocol:
   encoding: compact binary envelope v1
   identifiers: UUID via crypto.randomUUID()
@@ -244,7 +260,6 @@ Why this stack:
   React.
 - Automerge directly satisfies the strong-convergence requirement from the
   paper.
-- Node is the lowest-friction boundary for `signal-cli` and binary WebSocket
-  transport.
-- the protocol remains transport-agnostic so Signal can later be replaced by
-  MLS or another E2EE asynchronous broadcast backend.
+- Node is the lowest-friction boundary for `signal-cli` and binary WebSocket transport.
+- `PeerJsTransport` demonstrates that the same client/session protocol can use a browser-resident P2P backend without moving encryption, authorization or merge authority into the transport.
+- the protocol remains transport-agnostic so additional E2EE asynchronous broadcast backends can be added without changing editor semantics; capability metadata must still state each backend's real durability rather than assuming Signal-equivalent store-and-forward.

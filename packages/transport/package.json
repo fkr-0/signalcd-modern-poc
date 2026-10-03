@@ -1,6 +1,6 @@
 {
   "name": "@e2e-col/transport",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "private": true,
   "type": "module",
   "exports": {
@@ -9,5 +9,8 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run src"
+  },
+  "dependencies": {
+    "peerjslib": "github:fkr-0/peerjslib#v0.3.2"
   }
 }

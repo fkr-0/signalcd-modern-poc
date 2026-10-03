@@ -33,28 +33,30 @@ function lifecycleIdentity(): ClientIdentityAdapter {
   }
 }
 
-function createSession(): {
+function createSession(options: { readonly publishSnapshotOnRecoverySignal?: boolean } = {}): {
   readonly session: DocumentSession
   readonly transport: SimulatedTransport
+  readonly storage: MemoryCollaborativeStorage
 } {
   const network = new DeterministicTransportNetwork()
   const transport = network.createTransport('alice')
+  const storage = new MemoryCollaborativeStorage()
   let now = 1_000
   let message = 0
   const session = new DocumentSession({
     documentId,
     senderId: 'alice',
     transport,
-    storage: new MemoryCollaborativeStorage(),
+    storage,
     identity: lifecycleIdentity(),
     now: () => ++now,
     createMessageId: () => `22222222-2222-4222-8222-${String(++message).padStart(12, '0')}`,
     allowAuthorizationRootCreation: false,
     replayAttemptedOnReconnect: true,
-    publishSnapshotOnRecoverySignal: false,
+    publishSnapshotOnRecoverySignal: options.publishSnapshotOnRecoverySignal ?? false,
     onClosed: () => undefined
   })
-  return { session, transport }
+  return { session, transport, storage }
 }
 
 async function tick(): Promise<void> {
@@ -115,6 +117,56 @@ describe('DocumentSession lifecycle', () => {
 
     unsubscribe()
     await session.close()
+  })
+
+  it('separates PeerJS receiver replay gaps from healthy checkpoint-publisher requests', async () => {
+    const receiver = createSession({ publishSnapshotOnRecoverySignal: true })
+    await receiver.session.open()
+    receiver.transport.signalRecovery({
+      documentId,
+      sourceId: 'peerjs-replay-window',
+      targetId: 'local-history',
+      sendSequence: 7,
+      reason: 'peerjs-replay-gap'
+    })
+    await tick()
+
+    expect(receiver.session.getStatus()).toMatchObject({
+      phase: 'recovering',
+      recoveryRequired: true
+    })
+    expect(
+      (await receiver.storage.listOutbound(documentId)).some((record) => record.kind === 'snapshot')
+    ).toBe(false)
+    await receiver.session.close()
+
+    const responder = createSession({ publishSnapshotOnRecoverySignal: true })
+    await responder.session.open()
+    expect(responder.session.getStatus()).toMatchObject({ phase: 'ready', recoveryRequired: false })
+    responder.transport.signalRecovery({
+      documentId,
+      sourceId: 'peer-2:1',
+      targetId: 'peerjs-checkpoint-publisher',
+      sendSequence: 1,
+      reason: 'peerjs-checkpoint-request'
+    })
+    for (let index = 0; index < 20; index += 1) {
+      if (
+        (await responder.storage.listOutbound(documentId)).some(
+          (record) => record.kind === 'snapshot'
+        )
+      )
+        break
+      await tick()
+    }
+
+    expect(
+      (await responder.storage.listOutbound(documentId)).some(
+        (record) => record.kind === 'snapshot'
+      )
+    ).toBe(true)
+    expect(responder.session.getStatus()).toMatchObject({ phase: 'ready', recoveryRequired: false })
+    await responder.session.close()
   })
 
   it('closes idempotently and rejects edits after close with transport-closed', async () => {

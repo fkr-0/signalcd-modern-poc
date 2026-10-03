@@ -6,6 +6,32 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-08-27
+
+### Added
+
+- Browser-only `PeerJsTransport` alternative backed by `peerjslib` v0.3.2, preserving the existing recipient-bound application E2EE and authorization boundary while using capability-derived document rendezvous, elected-browser fan-out, bounded replay, heartbeat recovery, and explicit checkpoint repair.
+- Dedicated local-PeerServer Playwright qualification for Chromium and Firefox with three encrypted browser contexts, late-join replay, browser-hub loss, survivor re-election/reconnect, and post-loss convergence.
+- `docs/PEERJS-TRANSPORT.md` plus root/architecture documentation that distinguish PeerJS signalling/live P2P behavior from Signal's service-backed asynchronous mailbox semantics.
+
+### Changed
+
+- Workspace and Android app versions advance to `0.0.4` for the technical-preview candidate.
+- Root Vitest discovery explicitly excludes injected `node_modules` workspace copies so each canonical source test is executed once after fresh pnpm installs.
+- Browser transport configuration can select PeerJS for group-bound encrypted collaboration while unbound local workspaces remain deterministic/local.
+
+### Fixed
+
+- Existing browser E2E identity inspection now reads the schema-v2 IndexedDB stores (`identities_v2` / `sessions_v2`) instead of removed v1 store names.
+- The adopted `peerjslib` v0.3.2 normalizes real PeerJS BinaryPack `ArrayBuffer`/view payloads back to canonical `Uint8Array`, closing the browser-only data-frame drop discovered during Chromium qualification.
+- WebKit-safe IndexedDB identity storage uses out-of-line keys in the schema-v2 stores, avoiding the key-path behavior diagnosed on the current WebKit compatibility branch.
+
+### Compatibility and limits
+
+- `PeerJsTransport.send()` completion means acceptance by the elected browser hub, not remote CRDT merge or durable third-party storage.
+- PeerJS bounded replay can survive hub loss while replay-carrying participants remain online, but it does **not** survive a period where every participant is offline; real Signal qualification remains separately pending.
+- Local WebKit execution on the current Arch host is blocked by Playwright's missing `libicu74`/`libxml2`/`libflite1` runtime dependencies. GitHub CI and the tagged release workflow install Chromium/Firefox/WebKit dependencies explicitly before browser E2E.
+
 ## [0.0.3] - 2026-08-23
 
 ### Added

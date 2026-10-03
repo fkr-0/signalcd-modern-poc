@@ -409,9 +409,19 @@ export class DocumentSession implements DocumentSessionCommands {
         this.enqueueInbound(wire)
       }),
       this.options.transport.subscribeState((event) => this.handleTransportState(event.current)),
-      this.options.transport.subscribeRecovery(() => {
+      this.options.transport.subscribeRecovery((event) => {
+        // A PeerJS checkpoint request means another replica has a bounded
+        // replay-history gap. This healthy replica should publish a full
+        // snapshot without marking itself as recovering. Conversely, the
+        // receiver-side replay-gap event must enter recovering but must not
+        // publish its potentially incomplete local state as the repair source.
+        if (event.reason === 'peerjs-checkpoint-request') {
+          if (this.options.publishSnapshotOnRecoverySignal) this.scheduleRecoveryCheckpoint()
+          return
+        }
         this.setStatus({ phase: 'recovering', recoveryRequired: true })
-        if (this.options.publishSnapshotOnRecoverySignal) this.scheduleRecoveryCheckpoint()
+        if (event.reason !== 'peerjs-replay-gap' && this.options.publishSnapshotOnRecoverySignal)
+          this.scheduleRecoveryCheckpoint()
       })
     )
 

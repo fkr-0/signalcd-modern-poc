@@ -1,6 +1,6 @@
 {
   "name": "signalcd-modern-poc",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "private": true,
   "packageManager": "pnpm@11.3.0",
   "description": "Independent modern proof-of-concept implementation of the SignalCD construction from the USENIX Security 2026 E2EE-CD paper.",
@@ -17,6 +17,7 @@
     "test:core": "vitest run packages/core packages/protocol packages/transport packages/testing",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:e2e:peerjs": "playwright test --config playwright.peerjs.config.ts",
     "test:e2e:webkit:host": "playwright test --project=webkit",
     "test:e2e:webkit": "bash scripts/test-webkit-container.sh",
     "test:e2e:list": "playwright test --list",
@@ -37,6 +38,7 @@
     "@biomejs/biome": "^2.5.9",
     "@playwright/test": "^1.62.1",
     "fake-indexeddb": "^6.2.5",
+    "peer": "1.0.2",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11",
     "ws": "^8.21.3"

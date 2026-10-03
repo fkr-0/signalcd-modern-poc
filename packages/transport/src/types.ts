@@ -20,7 +20,11 @@ export interface TransportRecoveryRequired {
   readonly sourceId: string
   readonly targetId: string
   readonly sendSequence: number
-  readonly reason: 'dropped-frame' | 'sidecar-history-risk'
+  readonly reason:
+    | 'dropped-frame'
+    | 'sidecar-history-risk'
+    | 'peerjs-replay-gap'
+    | 'peerjs-checkpoint-request'
 }
 
 export type TransportRecoveryListener = (event: TransportRecoveryRequired) => void
