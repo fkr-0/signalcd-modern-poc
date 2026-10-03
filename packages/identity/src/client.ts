@@ -290,9 +290,7 @@ export class IdentityClient {
   }
 
   private async createSignedPrekey(): Promise<SignedPrekey> {
-    const pair = asKeyPair(
-      await crypto.subtle.generateKey({ name: 'X25519' }, false, ['deriveBits'])
-    )
+    const pair = await this.createX25519KeyPair()
     return {
       keyId: crypto.randomUUID(),
       publicKey: pair.publicKey,
@@ -302,15 +300,19 @@ export class IdentityClient {
   }
 
   private async createOneTimePrekey(): Promise<OneTimePrekey> {
-    const pair = asKeyPair(
-      await crypto.subtle.generateKey({ name: 'X25519' }, false, ['deriveBits'])
-    )
+    const pair = await this.createX25519KeyPair()
     return {
       keyId: crypto.randomUUID(),
       publicKey: pair.publicKey,
       privateKey: pair.privateKey,
       createdAt: this.now()
     }
+  }
+
+  private async createX25519KeyPair(): Promise<CryptoKeyPair> {
+    const persistentFactory = this.options.storage.createX25519KeyPair
+    if (persistentFactory) return asKeyPair(await persistentFactory.call(this.options.storage))
+    return asKeyPair(await crypto.subtle.generateKey({ name: 'X25519' }, false, ['deriveBits']))
   }
 }
 

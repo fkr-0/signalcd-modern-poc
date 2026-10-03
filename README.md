@@ -13,10 +13,13 @@ It is **not** an official Signal product and is not affiliated with Signal Messe
 | Project name | **SignalCD Modern PoC** |
 | Repository | `fkr-0/signalcd-modern-poc` |
 | Documentation | <https://signalcd-poc.fkr.dev/> |
-| Current release line | `0.0.4` technical preview |
+| Latest tagged release | `v0.0.2` |
+| Current development line | `0.0.3` technical-preview candidate (not yet tagged) |
 | Research system | **SignalCD** |
 | Paper | Christian Knabenhans, Zayd Maradni, Carmela Troncoso, _End-to-End Encrypted Collaborative Documents_, USENIX Security 2026 |
 | Upstream research prototype | <https://github.com/spring-epfl/signal-collaborative-documents> |
+
+The `0.0.3` code and release metadata are prepared, but the public tag still stops at `v0.0.2`; `0.0.3` remains a release candidate until the repository's full release gate passes. This distinction keeps the README aligned with the published Git history without weakening the technical-preview scope.
 
 The original internal namespace remains visible in compatibility-sensitive identifiers such as `@e2e-col/*`, `E2E_COL_*`, `e2e-col:v1:`, Android `dev.e2ecol.*`, and existing local-storage/deep-link identifiers. Those names are retained deliberately in the `0.x` line to avoid silently changing protocol, persistence, import, and deep-link contracts during a documentation/release rename.
 

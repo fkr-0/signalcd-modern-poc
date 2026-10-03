@@ -2,7 +2,7 @@ import { indexedDB as fakeIndexedDb } from 'fake-indexeddb'
 import { describe, expect, it } from 'vitest'
 import { exportRawKey } from './encoding'
 import { IndexedDbIdentityStorage } from './storage'
-import type { SignedPrekey, UserIdentity } from './types'
+import type { RemoteIdentity, SignedPrekey, UserIdentity } from './types'
 
 describe('IndexedDbIdentityStorage key lifecycle', () => {
   it('round-trips current, retired, staged signed prekeys and one-time publication state', async () => {
@@ -46,6 +46,115 @@ describe('IndexedDbIdentityStorage key lifecycle', () => {
       undefined
     ])
     await storage.close()
+  })
+
+  it('wraps storage-created X25519 keys and restores non-extractable runtime keys', async () => {
+    const name = `identity-wrapped-x25519-${crypto.randomUUID()}`
+    const storage = new IndexedDbIdentityStorage({ indexedDB: fakeIndexedDb, name })
+    const signedPair = await storage.createX25519KeyPair()
+    const oneTimePair = await storage.createX25519KeyPair()
+    const identity: UserIdentity = {
+      userId: '10000000-0000-4000-8000-000000000456',
+      phoneNumber: '+15550000456',
+      displayName: 'Wrapped fixture',
+      identityKeyPair: await ed25519(),
+      signedPrekeyPair: { ...signedPair, keyId: 'wrapped-signed', createdAt: 100 },
+      retiredSignedPrekeys: [],
+      oneTimePrekeys: [
+        { ...oneTimePair, keyId: 'wrapped-one-time', createdAt: 101, publishedAt: 102 }
+      ],
+      sessionToken: 'wrapped-session-token',
+      createdAt: 90
+    }
+
+    await storage.saveLocalIdentity(identity)
+    await storage.close()
+
+    const reopened = new IndexedDbIdentityStorage({ indexedDB: fakeIndexedDb, name })
+    const loaded = await reopened.loadLocalIdentity()
+    expect(await exportRawKey(loaded!.signedPrekeyPair.publicKey)).toBe(
+      await exportRawKey(signedPair.publicKey)
+    )
+    expect(loaded!.signedPrekeyPair.privateKey.extractable).toBe(false)
+    expect(await exportRawKey(loaded!.oneTimePrekeys[0]!.publicKey)).toBe(
+      await exportRawKey(oneTimePair.publicKey)
+    )
+    expect(loaded!.oneTimePrekeys[0]!.privateKey.extractable).toBe(false)
+    await reopened.close()
+
+    const db = await openDatabase(name)
+    expect(await requestAll(db, 'wrapped_keypairs_v3')).toHaveLength(2)
+    expect(await requestAll(db, 'keypairs_v2')).toHaveLength(1)
+    db.close()
+  })
+
+  it('serializes remote public keys instead of structured-cloning CryptoKeys', async () => {
+    const name = `identity-remote-public-${crypto.randomUUID()}`
+    const storage = new IndexedDbIdentityStorage({ indexedDB: fakeIndexedDb, name })
+    const identityKey = await ed25519()
+    const signed = await signedPrekey('remote-signed', 120)
+    const oneTime = await signedPrekey('remote-one-time', 121)
+    const remote: RemoteIdentity = {
+      userId: '20000000-0000-4000-8000-000000000789',
+      phoneNumber: '+15550000789',
+      displayName: 'Remote fixture',
+      identityKeyPublic: identityKey.publicKey,
+      signedPrekeyPublic: signed.publicKey,
+      oneTimePrekey: oneTime.publicKey,
+      verified: true,
+      fetchedAt: 122
+    }
+
+    await storage.saveRemoteIdentity(remote)
+    await storage.close()
+
+    const db = await openDatabase(name)
+    const serialized = (await requestAll(db, 'remote_identities_v3')) as Array<{
+      identityKeyRaw: Uint8Array
+      signedPrekeyRaw: Uint8Array
+      oneTimePrekeyRaw: Uint8Array
+    }>
+    expect(serialized).toHaveLength(1)
+    expect(serialized[0]?.identityKeyRaw).toBeInstanceOf(Uint8Array)
+    expect(serialized[0]?.signedPrekeyRaw).toBeInstanceOf(Uint8Array)
+    expect(serialized[0]?.oneTimePrekeyRaw).toBeInstanceOf(Uint8Array)
+    expect(await requestAll(db, 'remote_identities_v2')).toHaveLength(0)
+    db.close()
+
+    const reopened = new IndexedDbIdentityStorage({ indexedDB: fakeIndexedDb, name })
+    const loaded = await reopened.loadRemoteIdentity(remote.userId)
+    expect(loaded).toMatchObject({
+      userId: remote.userId,
+      phoneNumber: remote.phoneNumber,
+      displayName: remote.displayName,
+      verified: true,
+      fetchedAt: 122
+    })
+    expect(await exportRawKey(loaded!.identityKeyPublic)).toBe(
+      await exportRawKey(remote.identityKeyPublic)
+    )
+    expect(await exportRawKey(loaded!.signedPrekeyPublic)).toBe(
+      await exportRawKey(remote.signedPrekeyPublic)
+    )
+    expect(await exportRawKey(loaded!.oneTimePrekey!)).toBe(
+      await exportRawKey(remote.oneTimePrekey!)
+    )
+    await reopened.close()
+  })
+
+  it('upgrades an existing schema-v3 database with the serialized remote store', async () => {
+    const name = `identity-v3-migration-${crypto.randomUUID()}`
+    const db = await openSchemaV3Database(name)
+    db.close()
+
+    const storage = new IndexedDbIdentityStorage({ indexedDB: fakeIndexedDb, name })
+    await storage.loadLocalIdentity()
+    await storage.close()
+
+    const upgraded = await openDatabase(name)
+    expect(upgraded.version).toBe(4)
+    expect(upgraded.objectStoreNames.contains('remote_identities_v3')).toBe(true)
+    upgraded.close()
   })
 
   it('migrates v1 inline-key stores to out-of-line keys without losing private key material', async () => {
@@ -125,9 +234,37 @@ async function openLegacyDatabase(name: string): Promise<IDBDatabase> {
   })
 }
 
+async function openSchemaV3Database(name: string): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = fakeIndexedDb.open(name, 3)
+    request.onupgradeneeded = () => {
+      const db = request.result
+      for (const store of [
+        'identities_v2',
+        'keypairs_v2',
+        'remote_identities_v2',
+        'sessions_v2',
+        'wrapped_keypairs_v3',
+        'wrapping_keys_v3'
+      ])
+        db.createObjectStore(store)
+    }
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+}
+
 async function openDatabase(name: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = fakeIndexedDb.open(name)
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+}
+
+async function requestAll(db: IDBDatabase, storeName: string): Promise<unknown[]> {
+  return new Promise((resolve, reject) => {
+    const request = db.transaction(storeName).objectStore(storeName).getAll()
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => reject(request.error)
   })

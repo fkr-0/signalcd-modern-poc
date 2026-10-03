@@ -18,6 +18,8 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:peerjs": "playwright test --config playwright.peerjs.config.ts",
+    "test:e2e:webkit:host": "playwright test --project=webkit",
+    "test:e2e:webkit": "bash scripts/test-webkit-container.sh",
     "test:e2e:list": "playwright test --list",
     "test:storage": "vitest run packages/storage",
     "test:sidecar": "vitest run apps/sidecar",
@@ -29,7 +31,7 @@
     "demo:signal": "pnpm --filter @e2e-col/toy-signal-cli dev",
     "version:check": "node scripts/check-version.js",
     "check": "pnpm run version:check && pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run test && pnpm run build",
-    "check:release": "pnpm run check && pnpm run test:e2e"
+    "check:release": "pnpm run check && CI=1 E2E_COL_TEST_TOY_PORT=28216 E2E_COL_TEST_WEB_PORT=4273 pnpm exec playwright test --project=chromium --project=firefox && pnpm run test:e2e:webkit"
   },
   "license": "MIT",
   "devDependencies": {

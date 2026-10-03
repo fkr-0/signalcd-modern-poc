@@ -45,6 +45,10 @@ jobs:
 
   browser-e2e:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [chromium, firefox, webkit]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -56,8 +60,14 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install --with-deps chromium firefox webkit
-      - run: pnpm run test:e2e
+      - run: pnpm exec playwright install --with-deps ${{ matrix.project }}
+      - run: pnpm exec playwright test --project=${{ matrix.project }}
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-${{ matrix.project }}
+          path: test-results
+          if-no-files-found: ignore
 
   android:
     runs-on: ubuntu-latest
