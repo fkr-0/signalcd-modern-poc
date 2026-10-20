@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
+      - 'apps/web/**'
       - 'packages/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
@@ -60,6 +61,19 @@ jobs:
           rm -rf _site/api
           mkdir -p _site/api
           cp -R build/api-docs/. _site/api/
+
+      # This is a separate browser-only room, NOT the production SignalCD
+      # identity/group-authority app. It uses the tested PeerJsTransport and
+      # Automerge substrate with an invitation-derived AES-GCM room key.
+      - name: Build standalone PeerJS/WebRTC browser demo
+        run: |
+          pnpm --filter @e2e-col/web exec vite build --config vite.peerjs-demo.config.ts
+          mv apps/web/build/peerjs-demo/peerjs-demo.html apps/web/build/peerjs-demo/index.html
+
+      - name: Add browser demo to Pages artifact
+        run: |
+          mkdir -p _site/peerjs
+          cp -R apps/web/build/peerjs-demo/. _site/peerjs/
 
       - uses: actions/upload-pages-artifact@v3
         with:

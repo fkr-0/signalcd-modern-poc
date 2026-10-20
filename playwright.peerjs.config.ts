@@ -54,6 +54,11 @@ export default defineConfig({
       command: `VITE_E2E_COL_IDENTITY_URL=${toyBaseUrl} VITE_E2E_COL_TRANSPORT=peerjs VITE_E2E_COL_PEERJS_HOST=127.0.0.1 VITE_E2E_COL_PEERJS_PORT=${peerPort} VITE_E2E_COL_PEERJS_PATH=${peerPath} VITE_E2E_COL_PEERJS_KEY=peerjs VITE_E2E_COL_PEERJS_SECURE=false pnpm --filter @e2e-col/web build && pnpm --filter @e2e-col/web exec vite preview --host 127.0.0.1 --port ${webPort}`,
       url: webBaseUrl,
       reuseExistingServer: !process.env.CI
+    },
+    {
+      command: `VITE_E2E_COL_PEERJS_HOST=127.0.0.1 VITE_E2E_COL_PEERJS_PORT=${peerPort} VITE_E2E_COL_PEERJS_PATH=${peerPath} VITE_E2E_COL_PEERJS_KEY=peerjs VITE_E2E_COL_PEERJS_SECURE=false pnpm --filter @e2e-col/web exec vite build --config vite.peerjs-demo.config.ts && pnpm --filter @e2e-col/web exec vite preview --config vite.peerjs-demo.config.ts --host 127.0.0.1 --port 4182`,
+      url: 'http://127.0.0.1:4182/peerjs-demo.html',
+      reuseExistingServer: !process.env.CI
     }
   ]
 })

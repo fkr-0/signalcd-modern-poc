@@ -1,0 +1,139 @@
+:root {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  color: #e9f3ef;
+  background: #10191b;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+button,
+textarea {
+  font: inherit;
+}
+button {
+  padding: 12px 18px;
+  background: #a1f0c0;
+  color: #102219;
+  border: none;
+  cursor: pointer;
+  font-weight: 700;
+}
+button:hover {
+  background: #c9ffdc;
+}
+button:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid #63baff;
+  outline-offset: 2px;
+}
+a {
+  color: #a1f0c0;
+}
+.demo-shell {
+  max-width: 1060px;
+  margin: 0 auto;
+  padding: 28px 24px 60px;
+}
+.demo-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  border-bottom: 1px solid #36514c;
+  padding-bottom: 22px;
+}
+.demo-eyebrow {
+  font-size: 12px;
+  color: #9fd7b7;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+h1 {
+  font-size: clamp(28px, 5vw, 42px);
+  margin: 12px 0 6px;
+}
+p {
+  color: #b3c5bf;
+  line-height: 1.55;
+}
+.demo-status {
+  flex-shrink: 0;
+  background: #47352d;
+  padding: 10px 13px;
+  border: 1px solid #92765a;
+  font-size: 13px;
+}
+.demo-status.connected {
+  background: #213e30;
+  border-color: #427e58;
+}
+.demo-invite {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 22px;
+  padding: 20px;
+  margin: 24px 0 28px;
+  border: 1px solid #37534e;
+  background: #18292a;
+}
+.demo-invite p {
+  max-width: 630px;
+  margin: 5px 0 0;
+  font-size: 14px;
+}
+label {
+  display: block;
+  margin: 0 0 10px;
+  font-weight: 650;
+}
+textarea {
+  width: 100%;
+  min-height: min(55vh, 520px);
+  padding: 23px;
+  background: #142122;
+  color: #f0f8f3;
+  border: 1px solid #5a7670;
+  resize: vertical;
+  line-height: 1.7;
+  font-size: 17px;
+}
+textarea:disabled {
+  opacity: 0.55;
+}
+footer {
+  display: flex;
+  justify-content: space-between;
+  color: #9aafa8;
+  margin-top: 10px;
+  font-size: 13px;
+}
+.demo-warning {
+  margin-top: 32px;
+  padding: 18px 20px;
+  border-left: 3px solid #d8a36e;
+  background: #282821;
+}
+.demo-warning p {
+  margin-top: 8px;
+  font-size: 14px;
+}
+.demo-error {
+  border: 1px solid #ce7171;
+  padding: 12px 14px;
+  background: #402328;
+  color: #ffd3d3;
+}
+@media (max-width: 640px) {
+  .demo-header,
+  .demo-invite {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .demo-shell {
+    padding: 18px 14px 40px;
+  }
+}

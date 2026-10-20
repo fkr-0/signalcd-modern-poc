@@ -156,3 +156,21 @@ It starts the toy service only for identity/group/authorization metadata, a loca
 The finalized local qualification passes in both Chromium and Firefox. Chromium can require the heartbeat/stale fallback when closing the hub context does not immediately surface a WebRTC close event; the test therefore waits for an observed transport reconnect before sending the post-loss edit instead of treating a stale `online` UI state as proof of recovery.
 
 TURN-relay-required NAT qualification remains deployment evidence rather than a claim of this local-host test.
+
+## GitHub Pages standalone demonstration
+
+The public [/peerjs/](/peerjs/) room uses the **existing PeerJsTransport and
+Automerge** without a server-hosted identity directory. It intentionally has
+different access semantics: a random 256-bit invitation fragment provides
+symmetric AES-256-GCM room encryption and join authority. There are no verified
+user identities, signed membership controls, per-recipient key exchange, or
+revocation in this isolated browser-only mode.
+
+The full R6 authenticated/recipient-bound SignalCD browser app **still requires**
+its identity/group/authorization provider and does not become backend-free merely
+by setting `VITE_E2E_COL_TRANSPORT=peerjs`.
+
+The standalone app saves encrypted Automerge snapshots in browser IndexedDB.
+Peers exchange encrypted snapshots and incremental changes, with a snapshot
+request on reconnection. Public PeerJS Cloud connectivity and TURN-required
+NAT cases are **not** covered by the local PeerServer automated test.

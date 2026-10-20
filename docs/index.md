@@ -5,6 +5,22 @@ title: SignalCD Modern PoC
 
 # SignalCD Modern PoC
 
+## Try encrypted collaboration in two browsers
+
+**[Launch the browser-only PeerJS demo](/peerjs/)** · No install, Signal
+account, or local sidecar required. Open it in two different browser profiles
+or devices and share the generated invitation link. The app uses our existing
+Automerge/PeerJS transport components and AES-256-GCM encrypted frames.
+
+**Security boundary:** This is a deliberately separate *capability-based demo*,
+not the full SignalCD app's identity/role authorization design. Anyone with the
+link can read or edit. The public signalling service can see rendezvous traffic,
+not document plaintext. NAT/TURN restrictions may prevent certain peer connections;
+when every peer is offline there is no durable external mailbox. Local encrypted
+snapshots survive reloads in the same browser as long as the invitation secret is
+retained.
+
+
 > Independent modern proof-of-concept implementation of **SignalCD**, the system described in Christian Knabenhans, Zayd Maradni, and Carmela Troncoso, _End-to-End Encrypted Collaborative Documents_ (USENIX Security 2026).
 
 [GitHub repository](https://github.com/fkr-0/signalcd-modern-poc) · [Latest release + artifacts](https://github.com/fkr-0/signalcd-modern-poc/releases/latest) · [API docs](/api/) · [CI](https://github.com/fkr-0/signalcd-modern-poc/actions/workflows/ci.yml) · [Research provenance](RESEARCH-PROVENANCE.md)
