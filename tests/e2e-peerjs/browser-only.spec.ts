@@ -62,3 +62,68 @@ test('static browser-only PeerJS demo converges and restores encrypted local sta
     await Promise.allSettled([alice.close(), bob.close()])
   }
 })
+
+test('truncated invitation fails closed instead of silently joining a different room', async ({
+  page
+}) => {
+  const missingSecret = `${url}?document=11111111-1111-4111-8111-111111111111`
+  await page.goto(missingSecret)
+  await expect(page.getByRole('heading', { name: 'Cannot join this room' })).toBeVisible()
+  await expect(page.getByRole('alert')).toContainText(
+    'Some browsers or messaging applications strip'
+  )
+  expect(page.url()).toBe(missingSecret)
+  await expect(page.getByRole('textbox', { name: 'Shared document' })).toHaveCount(0)
+})
+
+test('browser displays peer diagnostics and never treats signaling alone as collaboration', async ({
+  page
+}) => {
+  await page.goto(url)
+  await expect(page.getByRole('status')).toContainText('online', { timeout: 30_000 })
+  await expect(page.getByLabel('Connection diagnostics')).toContainText('Connected peers')
+  await expect(page.getByLabel('Connection diagnostics')).toContainText('Room')
+})
+
+test('mobile Chromium client joins an existing desktop invitation and receives encrypted edits', async ({
+  browser,
+  browserName
+}) => {
+  test.skip(browserName !== 'chromium', 'Mobile Chrome emulation belongs to Chromium')
+  const desktop = await browser.newContext()
+  const mobile = await browser.newContext({
+    viewport: { width: 393, height: 852 },
+    isMobile: true,
+    hasTouch: true,
+    deviceScaleFactor: 3
+  })
+  try {
+    const a = await desktop.newPage()
+    const b = await mobile.newPage()
+    const diagnostics: string[] = []
+    a.on('pageerror', (event) => diagnostics.push(`page: ${event.message}`))
+    a.on('console', (event) => {
+      if (event.type() === 'error') diagnostics.push(`console: ${event.text()}`)
+    })
+    await a.goto(url)
+    try {
+      await expect(a.getByRole('status')).toContainText('online', { timeout: 40_000 })
+    } catch (cause) {
+      console.log('Chrome initial signaling diagnostics:', diagnostics)
+      console.log('Page alerts:', await a.locator('[role="alert"]').allTextContents())
+      console.log('Peer health:', await a.getByLabel('Connection diagnostics').allTextContents())
+      throw cause
+    }
+    const inviteUrl = a.url()
+    await b.goto(inviteUrl)
+    await expect(b.getByRole('status')).toContainText('online', { timeout: 30_000 })
+    await a.getByRole('textbox', { name: 'Shared document' }).fill('desktop to mobile chrome')
+    await expect(b.getByRole('textbox', { name: 'Shared document' })).toHaveValue(
+      'desktop to mobile chrome',
+      { timeout: 30_000 }
+    )
+    await expect(b.getByLabel('Connection diagnostics')).toContainText('Connected peers')
+  } finally {
+    await Promise.allSettled([desktop.close(), mobile.close()])
+  }
+})

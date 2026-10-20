@@ -174,3 +174,5 @@ The standalone app saves encrypted Automerge snapshots in browser IndexedDB.
 Peers exchange encrypted snapshots and incremental changes, with a snapshot
 request on reconnection. Public PeerJS Cloud connectivity and TURN-required
 NAT cases are **not** covered by the local PeerServer automated test.
+
+**Browser compatibility troubleshooting:** The room header displays its derived room code, PeerJS role, connected-peer count, and last signaling error. Opening just `/peerjs/` in two browsers creates **different random rooms**; use the full invitation including `#peerjs=`. The demo now fails closed on truncated invitations rather than silently generating an unrelated room. `online` alone proves only signaling/room availability and does not imply another participant is connected. On restrictive carrier or corporate NATs, WebRTC may need a TURN relay; this static demo does not provide one.

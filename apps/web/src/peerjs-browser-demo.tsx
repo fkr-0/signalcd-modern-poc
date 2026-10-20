@@ -20,15 +20,23 @@ type Room = {
   save: () => Promise<void>
 }
 
-function currentInvitation(): { documentId: string; secret: string; href: string } {
+interface Invitation {
+  readonly documentId: string
+  readonly secret: string
+  readonly href: string
+}
+
+function currentInvitation(): Invitation {
   const params = new URLSearchParams(location.search)
   const fragment = new URLSearchParams(location.hash.slice(1))
   let documentId = params.get('document') ?? ''
   let secret = fragment.get('peerjs') ?? ''
-  if (
-    !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu.test(documentId) ||
-    new TextEncoder().encode(secret).byteLength < 16
-  ) {
+  // A missing URL fragment is common when mobile browsers or link-opening apps
+  // truncate invitations. NEVER silently generate a new room in that case.
+  // Otherwise the user sees an apparently connected room with zero collaborators.
+  const hasDocument = params.has('document')
+  const hasSecret = fragment.has('peerjs')
+  if (!hasDocument && !hasSecret) {
     const created = newRoomInvitation()
     documentId = created.documentId
     secret = created.secret
@@ -36,6 +44,14 @@ function currentInvitation(): { documentId: string; secret: string; href: string
     url.search = `?document=${encodeURIComponent(documentId)}`
     url.hash = `peerjs=${encodeURIComponent(secret)}`
     history.replaceState(null, '', url)
+  } else if (
+    !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu.test(documentId) ||
+    new TextEncoder().encode(secret).byteLength < 16
+  ) {
+    throw new Error(
+      'Incomplete or invalid invitation. The full link must contain both ?document=<UUID> and #peerjs=<secret>. ' +
+        'Some browsers or messaging applications strip the #peerjs= fragment; copy and paste the ENTIRE link.'
+    )
   }
   return { documentId, secret, href: location.href }
 }
@@ -82,14 +98,63 @@ async function snapshotWrite(documentId: string, frame: Uint8Array): Promise<voi
 }
 
 function BrowserDemo() {
-  const [invite] = useState(currentInvitation)
+  const [parsed] = useState(() => {
+    try {
+      return { invitation: currentInvitation(), error: undefined }
+    } catch (cause) {
+      return {
+        invitation: undefined,
+        error: cause instanceof Error ? cause.message : 'Invalid invitation'
+      }
+    }
+  })
+  if (!parsed.invitation) {
+    const fresh = new URL(window.location.href)
+    fresh.search = ''
+    fresh.hash = ''
+    return (
+      <main className="demo-shell">
+        <h1>Cannot join this room</h1>
+        <p className="demo-error" role="alert">
+          {parsed.error}
+        </p>
+        <p>The invitation was not changed, so you can recover the correct URL from the sender.</p>
+        <a href={fresh.href}>Create a different, new private document</a>
+      </main>
+    )
+  }
+  return <BrowserRoom invite={parsed.invitation} />
+}
+
+function BrowserRoom({ invite }: { readonly invite: Invitation }) {
   const [state, setState] = useState('Connecting…')
   const [text, setText] = useState('')
   const [error, setError] = useState<string>()
   const [copied, setCopied] = useState(false)
   const [recovered, setRecovered] = useState(false)
+  const [peerHealth, setPeerHealth] = useState<{
+    connectedPeers: number
+    role: string
+    roomCode: string
+    lastError: string | null
+  }>()
   const room = useRef<Room | undefined>(undefined)
   const sendQueue = useRef<Promise<void>>(Promise.resolve())
+
+  useEffect(() => {
+    const refresh = () => {
+      const health = room.current?.transport.getLobbyHealth()
+      if (!health) return
+      setPeerHealth({
+        connectedPeers: health.connectedPeers,
+        role: health.role,
+        roomCode: health.roomId.slice(0, 10),
+        lastError: health.lastError
+      })
+    }
+    const timer = window.setInterval(refresh, 1500)
+    return () => window.clearInterval(timer)
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -99,6 +164,16 @@ function BrowserDemo() {
 
     async function run() {
       const { documentId, secret } = invite
+      if (!window.isSecureContext || !crypto?.subtle)
+        throw new Error(
+          'This browser needs HTTPS and WebCrypto SubtleCrypto for encrypted collaboration.'
+        )
+      if (typeof RTCPeerConnection === 'undefined')
+        throw new Error('WebRTC is unavailable or blocked by this browser.')
+      if (typeof indexedDB === 'undefined')
+        throw new Error(
+          'IndexedDB storage is disabled in this browser. Allow site storage to join.'
+        )
       const key = await (async () => {
         const raw = await crypto.subtle.importKey(
           'raw',
@@ -123,7 +198,16 @@ function BrowserDemo() {
       const previous = await snapshotRead(documentId)
       let restored: Uint8Array | undefined
       if (previous) {
-        const packet = await decryptRoomPacket(key, documentId, previous)
+        let packet: Awaited<ReturnType<typeof decryptRoomPacket>>
+        try {
+          packet = await decryptRoomPacket(key, documentId, previous)
+        } catch {
+          throw new Error(
+            'This browser already has an encrypted draft for the same document ID, but this link ' +
+              'cannot decrypt it. Check that you pasted the COMPLETE original invitation, including #peerjs=. ' +
+              'Your local data was left unchanged.'
+          )
+        }
         if (packet.kind !== 1) throw new Error('Stored snapshot has invalid format')
         restored = packet.payload
       }
@@ -278,6 +362,31 @@ function BrowserDemo() {
           PeerJS: {state}
         </span>
       </header>
+      <section className="demo-diagnostics" aria-label="Connection diagnostics">
+        <span>
+          <strong>Room</strong> {peerHealth?.roomCode ?? 'connecting'}
+        </span>
+        <span>
+          <strong>Role</strong> {peerHealth?.role ?? 'unknown'}
+        </span>
+        <span>
+          <strong>Connected peers</strong> {peerHealth?.connectedPeers ?? 0}
+        </span>
+        <span>
+          <strong>Network</strong> {navigator.onLine ? 'browser online' : 'browser offline'}
+        </span>
+        {peerHealth?.lastError ? (
+          <span className="demo-error" role="alert">
+            PeerJS: {peerHealth.lastError}
+          </span>
+        ) : null}
+        {state === 'online' && peerHealth?.connectedPeers === 0 ? (
+          <p>
+            Connected to PeerJS signaling, but no other browser is connected to this room yet. Every
+            participant must open the same complete invitation link.
+          </p>
+        ) : null}
+      </section>
       <section className="demo-invite">
         <div>
           <strong>Invitation link</strong>
