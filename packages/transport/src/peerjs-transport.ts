@@ -29,6 +29,30 @@ const SEEN_CHECKPOINT_REQUESTS = 256
 const encoder = new TextEncoder()
 const decoder = new TextDecoder('utf-8', { fatal: true })
 
+// PeerJS 1.5.5 accepts separators only *between* alphanumeric runs.
+// peerjslib's SHA-256/base64url rendezvous IDs occasionally contain '__',
+// '_-' or '--', which makes those rooms impossible to open in any browser.
+// Preserve the old rendezvous ID when valid; otherwise map deterministically
+// to a fixed-size, domain-separated hex ID. The same invite always selects
+// the same compatible ID, and its secret is never included in a signaling ID.
+const PEERJS_ID_PATTERN = /^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$/u
+
+export async function peerJsCompatibleRendezvousId(roomId: string): Promise<string> {
+  if (PEERJS_ID_PATTERN.test(roomId)) return roomId
+  if (!/^pjl1-[A-Za-z0-9_-]{43}$/u.test(roomId))
+    throw new Error('Unsupported PeerJS rendezvous ID format')
+  const digest = new Uint8Array(
+    await globalThis.crypto.subtle.digest(
+      'SHA-256',
+      encoder.encode(`e2e-col:peerjs-compatible-id:v1:\0${roomId}`)
+    )
+  )
+  // 21 digest bytes -> 168-bit collision resistance for the short hub ID.
+  return `pjl1x-${Array.from(digest.slice(0, 21), (byte) =>
+    byte.toString(16).padStart(2, '0')
+  ).join('')}`
+}
+
 export interface PeerJsTransportOptions {
   /** Invitation-grade capability material; never the public document UUID itself. */
   readonly rendezvousSecret: Uint8Array | string
@@ -143,7 +167,9 @@ export class PeerJsTransport implements ObservableCollaborativeTransport {
       throw new RangeError(
         'PeerJsTransport namespace plus documentId must not exceed 64 characters'
       )
-    const roomId = await deriveRendezvousRoomId(this.options.rendezvousSecret, { namespace })
+    const roomId = await peerJsCompatibleRendezvousId(
+      await deriveRendezvousRoomId(this.options.rendezvousSecret, { namespace })
+    )
     const configuredLobby = this.options.lobby ?? {}
     const lobbyOptions: PeerJsLobbyOptions = {
       ...configuredLobby,

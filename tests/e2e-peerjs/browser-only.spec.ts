@@ -133,3 +133,76 @@ test('mobile Chromium client joins an existing desktop invitation and receives e
     await Promise.allSettled([desktop.close(), mobile.close()])
   }
 })
+
+test('network inspector lists anonymous clients, captures logs and reconnects without losing the draft', async ({
+  browser
+}) => {
+  const aContext = await browser.newContext()
+  const bContext = await browser.newContext()
+  try {
+    const a = await aContext.newPage()
+    const b = await bContext.newPage()
+    await a.goto(url)
+    await expect(a.getByRole('status')).toContainText('online', { timeout: 30_000 })
+    await b.goto(a.url())
+    await expect(b.getByRole('status')).toContainText('online', { timeout: 30_000 })
+    await a.getByRole('textbox', { name: 'Shared document' }).fill('Persist through reconnect')
+    await expect(b.getByRole('textbox', { name: 'Shared document' })).toHaveValue(
+      'Persist through reconnect',
+      { timeout: 30_000 }
+    )
+
+    await expect(a.getByRole('region', { name: 'Connected client list' })).toContainText(
+      'anonymous peer',
+      { timeout: 20_000 }
+    )
+    await expect(b.getByRole('region', { name: 'Connected client list' })).toContainText(
+      'anonymous peer',
+      { timeout: 20_000 }
+    )
+
+    const metrics = a.getByRole('region', { name: 'PeerJS metrics' })
+    await expect(metrics).toContainText('Last sequence')
+    await expect(metrics).toContainText('Backpressure')
+    await expect(a.getByRole('log', { name: 'Local PeerJS event log' })).toContainText(
+      'Transport connecting',
+      { timeout: 20_000 }
+    )
+
+    await a.getByRole('button', { name: 'Request snapshot sync' }).click()
+    await expect(b.getByRole('log', { name: 'Local PeerJS event log' })).toContainText(
+      'peer requested a complete document snapshot',
+      { timeout: 20_000 }
+    )
+
+    await a.getByRole('button', { name: 'Reconnect', exact: true }).click()
+    await expect(a.getByRole('status')).toContainText('online', { timeout: 40_000 })
+    await expect(a.getByRole('textbox', { name: 'Shared document' })).toHaveValue(
+      'Persist through reconnect'
+    )
+    await expect(a.getByRole('log', { name: 'Local PeerJS event log' })).toContainText(
+      'Manual reconnect requested'
+    )
+
+    await a.getByRole('button', { name: 'Clear log' }).click()
+    await expect(a.getByRole('log', { name: 'Local PeerJS event log' })).toContainText(
+      'Waiting for transport events'
+    )
+  } finally {
+    await Promise.allSettled([aContext.close(), bContext.close()])
+  }
+})
+
+test('UUID-only join cannot bypass the secret and a complete invite works', async ({ page }) => {
+  await page.goto(url)
+  await expect(page).toHaveURL(/\?document=[0-9a-f-]+#peerjs=[0-9a-f]{64}$/)
+  const id = new URL(page.url()).searchParams.get('document')!
+  const join = page.getByRole('region', { name: 'Join room' })
+  await join.getByLabel('Document UUID').fill(id)
+  await join.getByRole('button', { name: 'Join room' }).click()
+  await expect(join.getByRole('alert')).toContainText('A UUID alone cannot decrypt a room')
+  await join.getByLabel('Paste complete invitation').fill(page.url())
+  await join.getByRole('button', { name: 'Join room' }).click()
+  await expect(page.getByRole('heading', { name: 'Private collaborative draft' })).toBeVisible()
+  await expect(page.getByRole('status')).toContainText('online', { timeout: 30_000 })
+})

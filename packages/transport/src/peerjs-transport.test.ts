@@ -1,7 +1,7 @@
 import { FakePeerNetwork } from 'peerjslib/testing'
 import { describe, expect, it } from 'vitest'
 import { encodeMockSignalFanoutFrame } from './mock-signal-transport'
-import { PeerJsTransport } from './peerjs-transport'
+import { PeerJsTransport, peerJsCompatibleRendezvousId } from './peerjs-transport'
 import type { TransportRecoveryRequired } from './types'
 
 const documentId = '11111111-1111-4111-8111-111111111111'
@@ -21,6 +21,18 @@ async function waitFor(predicate: () => boolean, attempts = 100): Promise<void> 
 }
 
 describe('PeerJsTransport', () => {
+  it('maps invalid base64url lobby IDs to deterministic PeerJS-safe IDs', async () => {
+    const invalid = `pjl1-${'a'.repeat(16)}__${'b'.repeat(25)}`
+    const valid = `pjl1-${'a'.repeat(43)}`
+    expect(invalid).toHaveLength(48)
+    expect(await peerJsCompatibleRendezvousId(valid)).toBe(valid)
+    const safe = await peerJsCompatibleRendezvousId(invalid)
+    expect(safe).toMatch(/^pjl1x-[a-f0-9]{42}$/u)
+    expect(safe).toBe(await peerJsCompatibleRendezvousId(invalid))
+    expect(await peerJsCompatibleRendezvousId(invalid.replace('__', '--'))).not.toBe(safe)
+    await expect(peerJsCompatibleRendezvousId('bad id')).rejects.toThrow()
+  })
+
   it('maps peerjslib hub acceptance and fan-out onto the opaque transport contract', async () => {
     const network = new FakePeerNetwork()
     const options = {

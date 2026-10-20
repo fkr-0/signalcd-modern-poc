@@ -2,7 +2,7 @@ const HEADER = new Uint8Array([0x53, 0x43, 0x44, 0x31]) // SCD1
 const IV_BYTES = 12
 const MAX_PACKET_BYTES = 256 * 1024
 
-export type RoomPacketKind = 1 | 2 | 3
+export type RoomPacketKind = 1 | 2 | 3 | 4
 export interface RoomPacket {
   readonly kind: RoomPacketKind
   readonly payload: Uint8Array
@@ -25,7 +25,7 @@ export async function encryptRoomPacket(
   kind: RoomPacketKind,
   payload: Uint8Array
 ): Promise<Uint8Array> {
-  if (![1, 2, 3].includes(kind)) throw new Error('Unsupported packet kind')
+  if (![1, 2, 3, 4].includes(kind)) throw new Error('Unsupported packet kind')
   if (payload.byteLength > MAX_PACKET_BYTES - 64) throw new Error('Packet too large')
   const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES))
   const plaintext = new Uint8Array(payload.byteLength + 1)
@@ -75,7 +75,9 @@ export async function decryptRoomPacket(
     )
   )
   const kind = plaintext[0]
-  if (kind !== 1 && kind !== 2 && kind !== 3) throw new Error('Unknown encrypted room message kind')
+  if (kind !== 1 && kind !== 2 && kind !== 3 && kind !== 4)
+    throw new Error('Unknown encrypted room message kind')
   if (kind === 3 && plaintext.byteLength !== 1) throw new Error('Invalid snapshot-request body')
+  if (kind === 4 && plaintext.byteLength !== 37) throw new Error('Invalid presence body')
   return { kind, payload: plaintext.slice(1) }
 }

@@ -176,3 +176,51 @@ request on reconnection. Public PeerJS Cloud connectivity and TURN-required
 NAT cases are **not** covered by the local PeerServer automated test.
 
 **Browser compatibility troubleshooting:** The room header displays its derived room code, PeerJS role, connected-peer count, and last signaling error. Opening just `/peerjs/` in two browsers creates **different random rooms**; use the full invitation including `#peerjs=`. The demo now fails closed on truncated invitations rather than silently generating an unrelated room. `online` alone proves only signaling/room availability and does not imply another participant is connected. On restrictive carrier or corporate NATs, WebRTC may need a TURN relay; this static demo does not provide one.
+
+
+## Browser network inspector
+
+The GitHub Pages `/peerjs/` demo now includes an expandable **Network inspector**.
+It is a client-only operator surface; no diagnostics or documents are uploaded
+to the Pages host.
+
+- **Transport inspection:** local PeerJS role and peer ID, hub epoch, lobby
+  counters (replay, queues, sends/receives, drops, reconnect attempts, stale
+  disconnects, backpressure), and last local activity.
+- **Observed clients:** an anonymous per-tab identifier announces its presence
+  in an encrypted application frame (type 4) every 12 seconds. The list shows
+  other tabs seen within 45 seconds; it is best-effort and not an authoritative
+  PeerJS directory or verified identity. Only short ID prefixes are displayed.
+  Membership/role authorization is **not** provided by this standalone demo.
+- **Local event log:** a bounded 200-event ring buffer records state changes,
+  snapshot recovery, outbound failures, remote edits and peer observations.
+  No raw message bodies or invitation secrets are logged.
+- **Reconnect / Retry:** stores the current document as an encrypted local
+  snapshot, closes the previous transport, and creates a fresh lobby connection.
+  If encrypted persistence fails, reconnect aborts rather than discarding the
+  in-memory draft. In addition, `Request snapshot sync` broadcasts a
+  request for other peers to publish their current encrypted snapshots.
+- **Join room:** paste a full invitation, or provide both a document UUID and
+  the 64-digit hexadecimal secret. The UUID alone is only a document locator;
+  the UI will not invent credentials or silently create a different room.
+  Changing rooms loads the new URL and preserves any encrypted local snapshots.
+
+**Troubleshooting Chrome:** confirm both tabs show the same *Room* code,
+then compare `Transport state`, `PeerJS lobby`, and `Observed clients`.
+A peer may have signaling connected without a working WebRTC data channel.
+The public PeerJS service and your network's NAT/TURN policy affect
+reachability; these diagnostics do not introduce a TURN relay. You can copy
+a locally generated diagnostic report that excludes document plaintext and
+the invitation secret.
+
+### PeerJS ID compatibility safeguard
+
+A browser compatibility problem was reproduced: peerjslib generates a SHA-256
+base64url rendezvous ID that sometimes contains consecutive `_-` separators,
+which PeerJS 1.5.5 **rejects as invalid**. Those rooms previously failed
+randomly depending on the invitation secret, not on Firefox vs Chrome.
+The transport now preserves IDs already accepted by PeerJS; for rejected
+base64url IDs it deterministically derives a domain-separated, 168-bit
+hexadecimal PeerJS-safe ID. Both peers must use the updated client. This
+does not change document E2EE, and the public UUID/secret invitation remains
+the same. Regression tests cover the rejected-ID case.

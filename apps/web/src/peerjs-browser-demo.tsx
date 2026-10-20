@@ -1,14 +1,28 @@
 import { CollaborativeDocument } from '@e2e-col/core'
 import { PeerJsTransport } from '@e2e-col/transport'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { peerJsTransportOptions } from './peerjs-config'
+import {
+  type InspectorEntry,
+  type PeerHealth,
+  PeerJsNetworkInspector,
+  type PeerMetrics
+} from './peerjs-network-inspector'
 import {
   decryptRoomPacket,
   encryptRoomPacket,
   newRoomInvitation,
   type RoomPacketKind
 } from './peerjs-room-crypto'
+import {
+  decodePresence,
+  encodePresence,
+  freshObservedPeers,
+  type ObservedPeer,
+  PRESENCE_INTERVAL_MS,
+  updateObservedPeers
+} from './peerjs-room-presence'
 import './peerjs-browser-demo.css'
 
 const DB_NAME = 'signalcd-peerjs-browser-demo-v1'
@@ -18,6 +32,7 @@ type Room = {
   transport: PeerJsTransport
   key: CryptoKey
   save: () => Promise<void>
+  requestSnapshot: () => void
 }
 
 interface Invitation {
@@ -132,35 +147,123 @@ function BrowserRoom({ invite }: { readonly invite: Invitation }) {
   const [error, setError] = useState<string>()
   const [copied, setCopied] = useState(false)
   const [recovered, setRecovered] = useState(false)
-  const [peerHealth, setPeerHealth] = useState<{
-    connectedPeers: number
-    role: string
-    roomCode: string
-    lastError: string | null
-  }>()
+  const [peerHealth, setPeerHealth] = useState<PeerHealth>()
+  const [metrics, setMetrics] = useState<PeerMetrics>()
+  const [observedPeers, setObservedPeers] = useState<ObservedPeer[]>([])
+  const [events, setEvents] = useState<InspectorEntry[]>([])
+  const [reconnectEpoch, setReconnectEpoch] = useState(0)
+  const [reconnecting, setReconnecting] = useState(false)
+  const anonymousClientId = useRef(crypto.randomUUID())
+  const eventSequence = useRef(0)
+  const lastPeerSnapshot = useRef('')
   const room = useRef<Room | undefined>(undefined)
   const sendQueue = useRef<Promise<void>>(Promise.resolve())
 
+  // Never put plaintext, the capability fragment, or complete URLs in diagnostic logs.
+  const record = useCallback(
+    (level: InspectorEntry['level'], detail: string) => {
+      const safe = detail
+        .replace(/(?:#?peerjs=)[0-9a-f]+/giu, 'peerjs=<redacted>')
+        .replaceAll(invite.secret, '<redacted>')
+      setEvents((current) => [
+        ...current.slice(-199),
+        { seq: ++eventSequence.current, at: Date.now(), level, message: safe.slice(0, 260) }
+      ])
+    },
+    [invite.secret]
+  )
+
   useEffect(() => {
     const refresh = () => {
-      const health = room.current?.transport.getLobbyHealth()
-      if (!health) return
-      setPeerHealth({
-        connectedPeers: health.connectedPeers,
-        role: health.role,
-        roomCode: health.roomId.slice(0, 10),
-        lastError: health.lastError
+      const session = room.current
+      const health = session?.transport.getLobbyHealth()
+      if (health) {
+        setPeerHealth(health)
+        setMetrics(session?.transport.getMetrics())
+        const key = [
+          health.role,
+          health.connectedPeers,
+          health.queuedOutbound,
+          health.pendingOutbound,
+          health.dropped,
+          health.lastError
+        ].join('|')
+        if (lastPeerSnapshot.current !== key) {
+          if (lastPeerSnapshot.current) {
+            if (health.lastError) record('warn', `PeerJS: ${health.lastError}`)
+            else if (health.role === 'hub')
+              record('info', `Hub has ${health.connectedPeers} active peer connections`)
+          }
+          lastPeerSnapshot.current = key
+        }
+      }
+      setObservedPeers((current) => {
+        const fresh = freshObservedPeers(current, Date.now())
+        return fresh.length === current.length ? current : fresh
       })
     }
+    refresh()
     const timer = window.setInterval(refresh, 1500)
     return () => window.clearInterval(timer)
-  }, [])
+  }, [record])
+
+  const retryConnection = useCallback(async () => {
+    if (reconnecting) return
+    setReconnecting(true)
+    setError(undefined)
+    record('info', 'Manual reconnect requested')
+    const previous = room.current
+    if (previous) {
+      // Force a durable encrypted snapshot before disposing the old document.
+      try {
+        await previous.save()
+      } catch (cause) {
+        record('error', 'Reconnect aborted: failed to save the encrypted document locally')
+        setError(cause instanceof Error ? cause.message : 'Unable to save before reconnect')
+        setReconnecting(false)
+        return
+      }
+      room.current = undefined
+      try {
+        await previous.transport.close()
+      } catch {
+        record('warn', 'Previous transport reported an error while closing')
+      }
+    }
+    lastPeerSnapshot.current = ''
+    setPeerHealth(undefined)
+    setMetrics(undefined)
+    setObservedPeers([])
+    setRecovered(false)
+    setReconnectEpoch((old) => old + 1)
+    setReconnecting(false)
+  }, [record, reconnecting])
+
+  const requestSnapshot = useCallback(() => {
+    const session = room.current
+    if (session?.transport.getState() !== 'online') return
+    session.requestSnapshot()
+    record('info', 'Requested full encrypted document snapshot from connected peers')
+  }, [record])
+
+  const beforeRoomJoin = useCallback(async () => {
+    const session = room.current
+    if (session) await session.save()
+    record('info', 'Stored encrypted document snapshot before switching rooms')
+  }, [record])
 
   useEffect(() => {
     let active = true
     let transport: PeerJsTransport | undefined
     const unsubscribers: Array<() => void> = []
     let saveQueue = Promise.resolve()
+    let presenceTimer: number | undefined
+    const greeted = new Set<string>()
+    record(
+      'info',
+      `Connecting to room ${invite.documentId.slice(0, 8)} (attempt ${reconnectEpoch + 1})`
+    )
+    setState('connecting')
 
     async function run() {
       const { documentId, secret } = invite
@@ -236,8 +339,13 @@ function BrowserRoom({ invite }: { readonly invite: Invitation }) {
         location.hash
       )
       transport = new PeerJsTransport({ ...options, namespace: 'scd-p2p' })
-      room.current = { document, transport, key, save }
       setText(document.getText())
+      record(
+        'info',
+        restored
+          ? 'Recovered encrypted local Automerge snapshot'
+          : 'Initialized an empty local document'
+      )
 
       // Every frame is encrypted before reaching the PeerJS lobby.
       async function publish(kind: RoomPacketKind, payload: Uint8Array) {
@@ -247,9 +355,24 @@ function BrowserRoom({ invite }: { readonly invite: Invitation }) {
       function queuePublish(kind: RoomPacketKind, payload: Uint8Array) {
         sendQueue.current = sendQueue.current.catch(() => {}).then(() => publish(kind, payload))
         void sendQueue.current.catch((cause: unknown) => {
-          if (active) setError(cause instanceof Error ? cause.message : 'Send failed')
+          if (active) {
+            record('error', `Outgoing ${kind === 4 ? 'presence' : 'document'} frame failed`)
+            setError(cause instanceof Error ? cause.message : 'Send failed')
+          }
         })
       }
+      room.current = {
+        document,
+        transport,
+        key,
+        save,
+        requestSnapshot: () => queuePublish(3, new Uint8Array())
+      }
+
+      presenceTimer = window.setInterval(() => {
+        if (active && transport?.getState() === 'online')
+          queuePublish(4, encodePresence(anonymousClientId.current))
+      }, PRESENCE_INTERVAL_MS)
 
       unsubscribers.push(
         transport.subscribe((wire) => {
@@ -257,7 +380,21 @@ function BrowserRoom({ invite }: { readonly invite: Invitation }) {
             const packet = await decryptRoomPacket(key, documentId, wire)
             if (!active) return
             if (packet.kind === 3) {
+              record('info', 'A peer requested a complete document snapshot')
               queuePublish(1, document.save())
+              return
+            }
+            if (packet.kind === 4) {
+              const observedId = decodePresence(packet.payload)
+              if (!observedId || observedId === anonymousClientId.current) return
+              setObservedPeers((current) => updateObservedPeers(current, observedId, Date.now()))
+              if (!greeted.has(observedId)) {
+                greeted.add(observedId)
+                record('info', `Observed anonymous peer ${observedId.slice(0, 8)}`)
+                // Respond once so a late-joining client sees current participants
+                // without needing to wait for the periodic heartbeat.
+                queuePublish(4, encodePresence(anonymousClientId.current))
+              }
               return
             }
             const changed =
@@ -265,15 +402,23 @@ function BrowserRoom({ invite }: { readonly invite: Invitation }) {
                 ? document.mergeSnapshot(packet.payload)
                 : document.applyChanges([packet.payload])
             if (changed) {
+              record(
+                'info',
+                packet.kind === 1
+                  ? 'Merged remote encrypted snapshot'
+                  : 'Applied remote encrypted edit'
+              )
               setText(document.getText())
               await save()
             }
           })().catch((cause: unknown) => {
-            if (active)
+            if (active) {
+              record('error', 'Rejected invalid or incompatible encrypted peer frame')
               setError(
                 'Rejected invalid/incompatible peer message: ' +
                   (cause instanceof Error ? cause.message : 'unknown error')
               )
+            }
           })
         })
       )
@@ -281,7 +426,12 @@ function BrowserRoom({ invite }: { readonly invite: Invitation }) {
         transport.subscribeState((event) => {
           if (!active) return
           setState(event.current)
+          record(
+            event.current === 'online' ? 'info' : 'warn',
+            `Transport ${event.previous} → ${event.current}`
+          )
           if (event.current === 'online') {
+            queuePublish(4, encodePresence(anonymousClientId.current))
             queuePublish(1, document.save())
             queuePublish(3, new Uint8Array())
           }
@@ -291,26 +441,30 @@ function BrowserRoom({ invite }: { readonly invite: Invitation }) {
         transport.subscribeRecovery((event) => {
           if (!active) return
           setRecovered(true)
+          record('warn', `Transport recovery: ${event.reason}`)
           if (event.reason === 'peerjs-checkpoint-request') queuePublish(1, document.save())
           else if (event.reason === 'peerjs-replay-gap') queuePublish(3, new Uint8Array())
         })
       )
       await transport.connect(documentId)
+      if (active) record('info', 'PeerJS connected; waiting for application-level presence')
     }
 
     void run().catch((cause: unknown) => {
       if (active) {
+        record('error', `Connection failed: ${cause instanceof Error ? cause.message : 'unknown'}`)
         setState('unavailable')
         setError(cause instanceof Error ? cause.message : 'Unable to start private room')
       }
     })
     return () => {
       active = false
+      if (presenceTimer !== undefined) window.clearInterval(presenceTimer)
       room.current = undefined
       for (const unsubscribe of unsubscribers) unsubscribe()
       if (transport) void transport.close()
     }
-  }, [invite])
+  }, [invite, record, reconnectEpoch])
 
   function change(nextText: string) {
     const session = room.current
@@ -332,9 +486,10 @@ function BrowserRoom({ invite }: { readonly invite: Invitation }) {
             await session.transport.send(encrypted)
           })
       }
-      void sendQueue.current.catch((cause: unknown) =>
+      void sendQueue.current.catch((cause: unknown) => {
+        record('error', 'Failed to deliver an encrypted edit; local snapshot retained')
         setError(cause instanceof Error ? cause.message : 'Peer send failed; local draft retained')
-      )
+      })
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Edit failed')
     }
@@ -364,7 +519,7 @@ function BrowserRoom({ invite }: { readonly invite: Invitation }) {
       </header>
       <section className="demo-diagnostics" aria-label="Connection diagnostics">
         <span>
-          <strong>Room</strong> {peerHealth?.roomCode ?? 'connecting'}
+          <strong>Room</strong> {peerHealth?.roomId.slice(0, 10) ?? 'connecting'}
         </span>
         <span>
           <strong>Role</strong> {peerHealth?.role ?? 'unknown'}
@@ -421,6 +576,20 @@ function BrowserRoom({ invite }: { readonly invite: Invitation }) {
           {error}
         </p>
       ) : null}
+      <PeerJsNetworkInspector
+        documentId={invite.documentId}
+        selfId={anonymousClientId.current}
+        transportState={state}
+        health={peerHealth}
+        metrics={metrics}
+        peers={observedPeers}
+        log={events}
+        working={reconnecting}
+        onRetry={retryConnection}
+        onBeforeJoin={beforeRoomJoin}
+        onResync={requestSnapshot}
+        onClearLog={() => setEvents([])}
+      />
       <aside className="demo-warning">
         <strong>Technical demonstration, not a production-secure editor.</strong>
         <p>
