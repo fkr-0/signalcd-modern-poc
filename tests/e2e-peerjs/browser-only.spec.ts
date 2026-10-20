@@ -123,6 +123,12 @@ test('mobile Chromium client joins an existing desktop invitation and receives e
       { timeout: 30_000 }
     )
     await expect(b.getByLabel('Connection diagnostics')).toContainText('Connected peers')
+    await expect(b.getByLabel('Connection diagnostics')).toContainText(
+      'Connected peers connected to hub'
+    )
+    await expect(b.getByLabel('Connection diagnostics')).not.toContainText(
+      'no other browser is connected'
+    )
   } finally {
     await Promise.allSettled([desktop.close(), mobile.close()])
   }

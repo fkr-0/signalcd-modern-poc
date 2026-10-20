@@ -370,7 +370,10 @@ function BrowserRoom({ invite }: { readonly invite: Invitation }) {
           <strong>Role</strong> {peerHealth?.role ?? 'unknown'}
         </span>
         <span>
-          <strong>Connected peers</strong> {peerHealth?.connectedPeers ?? 0}
+          <strong>Connected peers</strong>{' '}
+          {peerHealth?.role === 'client' && state === 'online'
+            ? 'connected to hub'
+            : (peerHealth?.connectedPeers ?? 0)}
         </span>
         <span>
           <strong>Network</strong> {navigator.onLine ? 'browser online' : 'browser offline'}
@@ -380,7 +383,7 @@ function BrowserRoom({ invite }: { readonly invite: Invitation }) {
             PeerJS: {peerHealth.lastError}
           </span>
         ) : null}
-        {state === 'online' && peerHealth?.connectedPeers === 0 ? (
+        {state === 'online' && peerHealth?.role === 'hub' && peerHealth.connectedPeers === 0 ? (
           <p>
             Connected to PeerJS signaling, but no other browser is connected to this room yet. Every
             participant must open the same complete invitation link.
