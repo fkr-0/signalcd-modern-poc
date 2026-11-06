@@ -103,6 +103,10 @@ jobs:
           java-version: '17'
           cache: gradle
       - uses: android-actions/setup-android@v3
+        with:
+          # The legacy "tools" package (the action default) no longer exists in the
+          # SDK repository and makes sdkmanager exit 1. Only platform-tools is needed.
+          packages: platform-tools
       - run: pnpm install --frozen-lockfile
       - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
       - run: pnpm run android:check

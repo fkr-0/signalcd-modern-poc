@@ -42,6 +42,14 @@ jobs:
 
       - uses: android-actions/setup-android@v3
 
+        with:
+
+          # The legacy "tools" package (the action default) no longer exists in the
+
+          # SDK repository and makes sdkmanager exit 1. Only platform-tools is needed.
+
+          packages: platform-tools
+
       - run: pnpm install --frozen-lockfile
 
       - name: Verify TypeScript workspace
