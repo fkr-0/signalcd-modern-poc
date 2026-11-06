@@ -93,7 +93,6 @@ async function collaborationAuthorizationState(
 interface StoredIdentityClaim {
   readonly userId: string
   readonly phoneNumber: string
-  readonly sessionToken: string
 }
 
 async function storedIdentity(page: Page): Promise<StoredIdentityClaim> {
@@ -110,7 +109,12 @@ async function storedIdentity(page: Page): Promise<StoredIdentityClaim> {
         request.onerror = () => reject(request.error ?? new Error(`failed to read ${store}`))
       })
     const identities = await readAll<{ userId: string; phoneNumber: string }>('identities_v2')
-    const sessions = await readAll<{ userId: string; sessionToken: string }>('sessions_v2')
+    const sessions = await readAll<{
+      userId: string
+      sessionTokenCiphertext?: Uint8Array
+      iv?: Uint8Array
+      sessionToken?: string
+    }>('sessions_v2')
     db.close()
     if (
       identities.length !== 1 ||
@@ -118,29 +122,127 @@ async function storedIdentity(page: Page): Promise<StoredIdentityClaim> {
       identities[0]?.userId !== sessions[0]?.userId
     )
       throw new Error('expected exactly one persisted browser identity/session')
+    if (
+      sessions[0]?.sessionToken !== undefined ||
+      sessions[0]?.sessionTokenCiphertext === undefined ||
+      sessions[0]?.iv === undefined
+    )
+      throw new Error('browser bearer session was not wrapped at rest')
     return {
       userId: identities[0]!.userId,
-      phoneNumber: identities[0]!.phoneNumber,
-      sessionToken: sessions[0]!.sessionToken
+      phoneNumber: identities[0]!.phoneNumber
     }
   })
 }
 
 async function createEncryptedGroup(
+  page: Page,
   alice: StoredIdentityClaim,
   documentId: string
 ): Promise<string> {
-  const createdResponse = await fetch(`${toyBaseUrl}/api/v1/groups`, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${alice.sessionToken}`,
-      'content-type': 'application/json'
+  const created = await page.evaluate(
+    async ({ baseUrl, targetDocumentId, expectedUserId }) => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open('e2e-col-identity')
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () => reject(request.error ?? new Error('identity database open failed'))
+      })
+      const session = await new Promise<{
+        userId: string
+        sessionTokenCiphertext: Uint8Array
+        iv: Uint8Array
+      }>((resolve, reject) => {
+        const request = db.transaction('sessions_v2').objectStore('sessions_v2').get(expectedUserId)
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () => reject(request.error ?? new Error('failed to read wrapped session'))
+      })
+      const wrappingKey = await new Promise<CryptoKey>((resolve, reject) => {
+        const request = db
+          .transaction('wrapping_keys_v3')
+          .objectStore('wrapping_keys_v3')
+          .get('x25519-aes-gcm-v1')
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () => reject(request.error ?? new Error('failed to read wrapping key'))
+      })
+      db.close()
+      const plaintext = new Uint8Array(
+        await crypto.subtle.decrypt(
+          {
+            name: 'AES-GCM',
+            iv: session.iv,
+            additionalData: new TextEncoder().encode(`e2e-col/session-token/v1:${session.userId}`)
+          },
+          wrappingKey,
+          session.sessionTokenCiphertext
+        )
+      )
+      const sessionToken = new TextDecoder().decode(plaintext)
+      plaintext.fill(0)
+      const response = await fetch(`${baseUrl}/api/v1/groups`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${sessionToken}`,
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({
+          document_id: targetDocumentId,
+          name: 'Phase 2 encrypted browser proof'
+        })
+      })
+      const body = (await response.json()) as { group_id?: string }
+      return { status: response.status, groupId: body.group_id }
     },
-    body: JSON.stringify({ document_id: documentId, name: 'Phase 2 encrypted browser proof' })
-  })
-  expect(createdResponse.status).toBe(201)
-  const created = (await createdResponse.json()) as { group_id: string }
-  return created.group_id
+    { baseUrl: toyBaseUrl, targetDocumentId: documentId, expectedUserId: alice.userId }
+  )
+  expect(created.status).toBe(201)
+  if (!created.groupId) throw new Error('group creation did not return group_id')
+  return created.groupId
+}
+
+async function browserSessionSecretAbsentFromToyState(page: Page): Promise<boolean> {
+  return page.evaluate(async (baseUrl) => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('e2e-col-identity')
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error ?? new Error('identity database open failed'))
+    })
+    const sessions = await new Promise<
+      Array<{ userId: string; sessionTokenCiphertext: Uint8Array; iv: Uint8Array }>
+    >((resolve, reject) => {
+      const request = db.transaction('sessions_v2').objectStore('sessions_v2').getAll()
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error ?? new Error('failed to read wrapped session'))
+    })
+    if (sessions.length !== 1) throw new Error('expected one wrapped browser session')
+    const session = sessions[0]!
+    const wrappingKey = await new Promise<CryptoKey>((resolve, reject) => {
+      const request = db
+        .transaction('wrapping_keys_v3')
+        .objectStore('wrapping_keys_v3')
+        .get('x25519-aes-gcm-v1')
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error ?? new Error('failed to read wrapping key'))
+    })
+    db.close()
+    const plaintext = new Uint8Array(
+      await crypto.subtle.decrypt(
+        {
+          name: 'AES-GCM',
+          iv: session.iv,
+          additionalData: new TextEncoder().encode(`e2e-col/session-token/v1:${session.userId}`)
+        },
+        wrappingKey,
+        session.sessionTokenCiphertext
+      )
+    )
+    const sessionToken = new TextDecoder().decode(plaintext)
+    plaintext.fill(0)
+    const [state, log] = await Promise.all([
+      fetch(`${baseUrl}/__toy__/v1/state`).then((response) => response.text()),
+      fetch(`${baseUrl}/__toy__/v1/sync-log/export`).then((response) => response.text())
+    ])
+    return !state.includes(sessionToken) && !log.includes(sessionToken)
+  }, toyBaseUrl)
 }
 
 async function createLocallyRootedDocument(
@@ -314,6 +416,108 @@ test('restores the same identity and local document after browser reload', async
   await expect(page.locator('textarea')).toHaveValue('durable local draft')
 })
 
+test('installs the PWA shell and restores the wrapped identity and document fully offline', async ({
+  page,
+  context,
+  browserName
+}) => {
+  await register(page, 'Offline PWA')
+  await page.locator('textarea').fill('offline durable draft')
+
+  const pwa = await page.evaluate(async () => {
+    const manifest = (await (await fetch('/manifest.webmanifest')).json()) as {
+      name?: string
+      start_url?: string
+      scope?: string
+      display?: string
+      icons?: unknown[]
+    }
+    const registration = (await navigator.serviceWorker.ready) as ServiceWorkerRegistration & {
+      sync?: { getTags?: () => Promise<string[]> }
+    }
+    let syncTags: string[] | undefined
+    if (registration.sync?.getTags) {
+      try {
+        syncTags = await registration.sync.getTags()
+      } catch {
+        // Chromium exposes SyncManager in some hermetic/headless runs while the
+        // feature is policy-disabled. Registration is deliberately best-effort.
+      }
+    }
+    return {
+      manifest,
+      controlled: Boolean(navigator.serviceWorker.controller),
+      backgroundSyncSupported: syncTags !== undefined,
+      backgroundSyncRegistered: syncTags?.includes('signalcd-reconnect') ?? false
+    }
+  })
+  expect(pwa.manifest).toMatchObject({
+    name: 'SignalCD Modern PoC',
+    start_url: '/',
+    scope: '/',
+    display: 'standalone'
+  })
+  expect(pwa.manifest.icons?.length).toBeGreaterThan(0)
+  expect(pwa.controlled).toBe(true)
+  if (pwa.backgroundSyncSupported) expect(pwa.backgroundSyncRegistered).toBe(true)
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const required = [
+          ...performance
+            .getEntriesByType('resource')
+            .map((entry) => new URL(entry.name).pathname)
+            .filter((path) => path.startsWith('/assets/')),
+          ...Array.from(document.querySelectorAll('script[src], link[rel="stylesheet"][href]')).map(
+            (element) =>
+              new URL(
+                element instanceof HTMLScriptElement
+                  ? element.src
+                  : (element as HTMLLinkElement).href
+              ).pathname
+          )
+        ]
+        const unique = [...new Set(required)]
+        if (unique.length === 0) return false
+        return (
+          await Promise.all(
+            unique.map((path) => caches.match(path).then((match) => Boolean(match)))
+          )
+        ).every(Boolean)
+      })
+    )
+    .toBe(true)
+
+  const csp = await page
+    .locator('meta[http-equiv="Content-Security-Policy"]')
+    .getAttribute('content')
+  expect(csp).toContain("object-src 'none'")
+  expect(csp).toContain("base-uri 'none'")
+  expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval'")
+
+  if (browserName === 'webkit') {
+    // Playwright WebKit currently throws an engine-level internal error when
+    // context.setOffline(true) is combined with a service-worker navigation.
+    // Keep WebKit qualification meaningful by proving the full runtime is in
+    // Cache Storage and by forcing the online session verification request to
+    // fail; application startup must still restore the wrapped local identity.
+    await context.route('**/api/v1/identity/session', (route) => route.abort('failed'))
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await expect(page.getByRole('heading', { name: 'Your encrypted workspace.' })).toBeVisible()
+    await expect(page.locator('textarea')).toHaveValue('offline durable draft')
+    await storedIdentity(page)
+    await context.unroute('**/api/v1/identity/session')
+    return
+  }
+
+  await context.setOffline(true)
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await expect(page.getByRole('heading', { name: 'Your encrypted workspace.' })).toBeVisible()
+  await expect(page.locator('textarea')).toHaveValue('offline durable draft')
+  await storedIdentity(page)
+  await context.setOffline(false)
+})
+
 test('keeps separate browser contexts as separate clients', async ({ browser }) => {
   const firstContext = await browser.newContext()
   const secondContext = await browser.newContext()
@@ -382,7 +586,7 @@ test('persists two local titles across profile restart and keeps group binding p
     await expect(page.locator('textarea')).toHaveValue('alpha browser body')
     expect(new URL(page.url()).searchParams.get('document')).toBe(alphaId)
 
-    const groupId = await createEncryptedGroup(identity, alphaId)
+    const groupId = await createEncryptedGroup(page, identity, alphaId)
     await openEncryptedGroup(page, groupId, alphaId)
     await expect(page.getByRole('button', { name: 'New', exact: true })).toBeDisabled()
     await expect(
@@ -417,7 +621,7 @@ test('explicit toy debug mode decrypts only the separate observer copy into the 
     const alice = await storedIdentity(alicePage)
     const bob = await storedIdentity(bobPage)
     const documentId = await createLocallyRootedDocument(alicePage, alice)
-    const groupId = await createEncryptedGroup(alice, documentId)
+    const groupId = await createEncryptedGroup(alicePage, alice, documentId)
 
     const enableResponse = await fetch(`${toyBaseUrl}/__toy__/v1/config`, {
       method: 'POST',
@@ -476,15 +680,13 @@ test('explicit toy debug mode decrypts only the separate observer copy into the 
 
     const stateText = await (await fetch(`${toyBaseUrl}/__toy__/v1/state`)).text()
     expect(stateText).not.toContain(knownPlaintext)
-    expect(stateText).not.toContain(alice.sessionToken)
-    expect(stateText).not.toContain(bob.sessionToken)
+    expect(await browserSessionSecretAbsentFromToyState(alicePage)).toBe(true)
+    expect(await browserSessionSecretAbsentFromToyState(bobPage)).toBe(true)
     const entries = (await (
       await fetch(`${toyBaseUrl}/__toy__/v1/sync-log/export`)
     ).json()) as Array<Record<string, unknown>>
     const stripped = entries.map(({ preview: _preview, ...entry }) => entry)
     expect(JSON.stringify(stripped)).not.toContain(knownPlaintext)
-    expect(JSON.stringify(entries)).not.toContain(alice.sessionToken)
-    expect(JSON.stringify(entries)).not.toContain(bob.sessionToken)
 
     const disableResponse = await fetch(`${toyBaseUrl}/__toy__/v1/config`, {
       method: 'POST',
@@ -528,7 +730,7 @@ test('two isolated browser clients converge through recipient-bound encrypted to
     expect(alice.phoneNumber).not.toBe(bob.phoneNumber)
 
     const documentId = await createLocallyRootedDocument(alicePage, alice)
-    const groupId = await createEncryptedGroup(alice, documentId)
+    const groupId = await createEncryptedGroup(alicePage, alice, documentId)
     await openEncryptedGroup(alicePage, groupId, documentId)
     await inviteEncryptedParticipant(alicePage, bob)
     await openEncryptedGroup(bobPage, groupId, documentId)
@@ -658,7 +860,6 @@ test('two isolated browser clients converge through recipient-bound encrypted to
     await expect(bobPage.locator('textarea')).toHaveCount(1)
     const bobAfterReload = await storedIdentity(bobPage)
     expect(bobAfterReload.userId).toBe(bob.userId)
-    expect(bobAfterReload.sessionToken).toBe(bob.sessionToken)
 
     const afterReloadState = (await (
       await fetch(`${toyBaseUrl}/__toy__/v1/state`)
@@ -695,7 +896,7 @@ test('reopens the same persistent browser profile with document, queue replay, a
     const alice = await storedIdentity(alicePage)
     const bob = await storedIdentity(bobPage)
     const documentId = await createLocallyRootedDocument(alicePage, alice)
-    const groupId = await createEncryptedGroup(alice, documentId)
+    const groupId = await createEncryptedGroup(alicePage, alice, documentId)
     await openEncryptedGroup(alicePage, groupId, documentId)
     await inviteEncryptedParticipant(alicePage, bob)
     await openEncryptedGroup(bobPage, groupId, documentId)
@@ -729,7 +930,6 @@ test('reopens the same persistent browser profile with document, queue replay, a
 
     const restoredBob = await storedIdentity(reopenedBobPage)
     expect(restoredBob.userId).toBe(bob.userId)
-    expect(restoredBob.sessionToken).toBe(bob.sessionToken)
     await expect(reopenedBobPage.locator('textarea')).toHaveValue(pendingText)
     await expect(alicePage.locator('textarea')).toHaveValue(pendingText)
     await expect(reopenedBobPage.getByTestId('sync-state')).toContainText('Replay complete 1/1')

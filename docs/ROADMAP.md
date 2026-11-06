@@ -475,3 +475,41 @@ P4 (future/security/product):
   19. Authenticated Ed25519 identity-key rebind/re-verification protocol
   20. Double Ratchet/session-key evolution only if stronger forward/post-compromise secrecy is required
 ```
+
+## 8. Proposed release train after 0.0.5
+
+The following version boundaries are planning targets, not promises to ship incomplete security work.
+
+### 0.0.6 — browser/release portability
+
+- Reproducible local WebKit qualification using the exact installed Playwright version's supported
+  userspace instead of host ABI symlinks or system-package downgrades.
+- Configurable E2E preview ports and explicit pre-started-server reuse so local release checks do not
+  collide with unrelated development servers.
+- A release check that keeps Chromium/Firefox native while supplying WebKit through the exact-version
+  container fallback on heterogeneous Linux hosts.
+- No protocol, authorization, identity-key, CRDT, or production transport semantic change.
+
+### 0.0.7 — Android M2 security parity
+
+- Native identity lifecycle and recipient-bound encrypted-envelope parity sufficient to keep private
+  keys client-owned on Android.
+- Only after that parity is qualified may Compose shared-document sends be enabled.
+- Preserve R6 Ed25519 commitments; do not use M2 as a vehicle for long-term identity-key rebinding.
+- If M2 cannot meet the existing browser E2EE boundary, defer the version rather than ship a
+  plaintext/native shortcut.
+
+### 0.0.8 — structured editor/product slice
+
+- First-class structured editor UI over the already-landed block/list/comment model.
+- Attachment **content** storage/transport semantics (the 0.0.5 core model carries metadata only).
+- Keyboard/accessibility qualification and targeted bundle/code-splitting work for the current Vite
+  >500 kB application chunk warning.
+
+### 0.1.0 — deployment-evidence milestone
+
+Do not schedule the first minor release merely because patch numbers are exhausted. A 0.1.0
+candidate should require, at minimum, the real two-account `signal-cli` smoke on a pre-existing group,
+recorded deployment-specific body limits, supported-host Chromium/Firefox/WebKit release evidence,
+and a reviewed first-contact identity/freshness deployment story. Android/desktop features may remain
+separately previewed, but their limits must be explicit rather than implied complete.

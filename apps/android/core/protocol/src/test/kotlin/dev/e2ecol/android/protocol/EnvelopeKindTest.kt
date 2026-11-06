@@ -14,12 +14,13 @@ class EnvelopeKindTest {
         assertEquals(EnvelopeKind.DELETE, EnvelopeKind.fromCode(5))
         assertEquals(EnvelopeKind.HEALTH, EnvelopeKind.fromCode(6))
         assertEquals(EnvelopeKind.CHUNK, EnvelopeKind.fromCode(7))
+        assertEquals(EnvelopeKind.AUTHORIZATION_RESOLUTION, EnvelopeKind.fromCode(8))
     }
 
     @Test
     fun `fromCode rejects unknown codes`() {
         assertFailsWith<ProtocolCodecException> { EnvelopeKind.fromCode(0) }
-        assertFailsWith<ProtocolCodecException> { EnvelopeKind.fromCode(8) }
+        assertFailsWith<ProtocolCodecException> { EnvelopeKind.fromCode(9) }
         assertFailsWith<ProtocolCodecException> { EnvelopeKind.fromCode(255) }
     }
 
@@ -29,5 +30,6 @@ class EnvelopeKindTest {
         assertEquals("snapshot", EnvelopeKind.SNAPSHOT.wireName)
         assertEquals("membership", EnvelopeKind.MEMBERSHIP.wireName)
         assertEquals("chunk", EnvelopeKind.CHUNK.wireName)
+        assertEquals("authorization-resolution", EnvelopeKind.AUTHORIZATION_RESOLUTION.wireName)
     }
 }

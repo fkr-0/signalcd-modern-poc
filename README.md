@@ -13,7 +13,7 @@ It is **not** an official Signal product and is not affiliated with Signal Messe
 | Project name | **SignalCD Modern PoC** |
 | Repository | `fkr-0/signalcd-modern-poc` |
 | Documentation | <https://signalcd-poc.fkr.dev/> |
-| Current release line | `0.0.5` technical preview |
+| Current release line | `0.0.6` technical preview |
 | Research system | **SignalCD** |
 | Paper | Christian Knabenhans, Zayd Maradni, Carmela Troncoso, _End-to-End Encrypted Collaborative Documents_, USENIX Security 2026 |
 | Upstream research prototype | <https://github.com/spring-epfl/signal-collaborative-documents> |
@@ -72,6 +72,7 @@ pnpm dev
 ```
 
 For the real `signal-cli` bring-up path and its current external prerequisites, see [`docs/LIVE-TUTORIAL.md`](docs/LIVE-TUTORIAL.md). For Android, see [`docs/android-integration.md`](docs/android-integration.md).
+For the static PWA build, security headers, offline behavior, and hosting contract, see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 ## Releases and artifacts
 

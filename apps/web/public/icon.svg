@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="SignalCD">
+  <rect width="512" height="512" rx="104" fill="#101418"/>
+  <path d="M116 144h280v56H180v84h176v56H180v28h216v56H116z" fill="#f4f7f8"/>
+  <circle cx="368" cy="256" r="28" fill="#8bd8bd"/>
+</svg>

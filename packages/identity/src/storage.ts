@@ -16,6 +16,7 @@ const WRAPPED_KEYPAIRS = 'wrapped_keypairs_v3'
 const WRAPPING_KEYS = 'wrapping_keys_v3'
 const SERIALIZED_REMOTE_IDENTITIES = 'remote_identities_v3'
 const WRAPPING_KEY_ID = 'x25519-aes-gcm-v1'
+const SESSION_TOKEN_AAD_DOMAIN = 'e2e-col/session-token/v1'
 const LEGACY_IDENTITIES = 'identities'
 const LEGACY_KEYPAIRS = 'keypairs'
 const LEGACY_REMOTE_IDENTITIES = 'remote_identities'
@@ -26,17 +27,6 @@ interface StoredIdentityMetadata {
   readonly phoneNumber: string
   readonly displayName: string
   readonly createdAt: number
-}
-
-interface StoredRemoteIdentity {
-  readonly userId: string
-  readonly phoneNumber: string
-  readonly displayName?: string
-  readonly identityKeyRaw: Uint8Array<ArrayBuffer>
-  readonly signedPrekeyRaw: Uint8Array<ArrayBuffer>
-  readonly oneTimePrekeyRaw?: Uint8Array<ArrayBuffer>
-  readonly verified: boolean
-  readonly fetchedAt: number
 }
 
 async function serializeRemoteIdentity(identity: RemoteIdentity): Promise<StoredRemoteIdentity> {
@@ -119,6 +109,17 @@ interface StoredWrappedKeyPair extends WrappedX25519Material {
   readonly publishedAt?: number
 }
 
+interface StoredRemoteIdentity {
+  readonly userId: string
+  readonly phoneNumber: string
+  readonly displayName?: string
+  readonly identityKeyRaw: Uint8Array<ArrayBuffer>
+  readonly signedPrekeyRaw: Uint8Array<ArrayBuffer>
+  readonly oneTimePrekeyRaw?: Uint8Array<ArrayBuffer>
+  readonly verified: boolean
+  readonly fetchedAt: number
+}
+
 interface StoredKeyPair {
   readonly keyId: string
   readonly userId: string
@@ -135,10 +136,18 @@ interface StoredKeyPair {
   readonly publishedAt?: number
 }
 
-interface StoredSession {
+interface LegacyStoredSession {
   readonly userId: string
   readonly sessionToken: string
 }
+
+interface WrappedStoredSession {
+  readonly userId: string
+  readonly sessionTokenCiphertext: Uint8Array<ArrayBuffer>
+  readonly iv: Uint8Array<ArrayBuffer>
+}
+
+type StoredSession = LegacyStoredSession | WrappedStoredSession
 
 export interface IndexedDbIdentityStorageOptions {
   readonly name?: string
@@ -176,6 +185,7 @@ export class IndexedDbIdentityStorage implements IdentityStorage {
   private readonly dbPromise: Promise<IDBDatabase>
   private readonly wrappedX25519 = new WeakMap<CryptoKey, WrappedX25519Material>()
   private wrappingKeyPromise: Promise<CryptoKey> | undefined
+  private x25519CreationQueue: Promise<void> = Promise.resolve()
 
   constructor(options: IndexedDbIdentityStorageOptions = {}) {
     const factory = options.indexedDB ?? globalThis.indexedDB
@@ -224,6 +234,14 @@ export class IndexedDbIdentityStorage implements IdentityStorage {
       throw new Error('identity storage is incomplete or corrupt')
     }
 
+    const sessionToken = await this.readSessionToken(session)
+    if ('sessionToken' in session) {
+      const migratedSession = await this.wrapSessionToken(local.userId, sessionToken)
+      const migration = db.transaction(SESSIONS, 'readwrite')
+      migration.objectStore(SESSIONS).put(migratedSession, local.userId)
+      await complete(migration)
+    }
+
     return {
       userId: local.userId,
       phoneNumber: local.phoneNumber,
@@ -235,7 +253,7 @@ export class IndexedDbIdentityStorage implements IdentityStorage {
         ? {}
         : { pendingSignedPrekey: toSignedPrekey(pendingSignedPrekey) }),
       oneTimePrekeys: oneTimePrekeys.map(toOneTimePrekey),
-      sessionToken: session.sessionToken,
+      sessionToken,
       createdAt: local.createdAt
     }
   }
@@ -243,6 +261,7 @@ export class IndexedDbIdentityStorage implements IdentityStorage {
   async saveLocalIdentity(identity: UserIdentity): Promise<void> {
     const db = await this.dbPromise
     const wrapped = this.wrappedRecords(identity)
+    const session = await this.wrapSessionToken(identity.userId, identity.sessionToken)
     if (wrapped) {
       const tx = db.transaction([IDENTITIES, KEYPAIRS, WRAPPED_KEYPAIRS, SESSIONS], 'readwrite')
       tx.objectStore(IDENTITIES).clear()
@@ -270,13 +289,7 @@ export class IndexedDbIdentityStorage implements IdentityStorage {
         'identity'
       )
       for (const record of wrapped) tx.objectStore(WRAPPED_KEYPAIRS).put(record, record.keyId)
-      tx.objectStore(SESSIONS).put(
-        {
-          userId: identity.userId,
-          sessionToken: identity.sessionToken
-        } satisfies StoredSession,
-        identity.userId
-      )
+      tx.objectStore(SESSIONS).put(session, identity.userId)
       await complete(tx)
       return
     }
@@ -357,13 +370,7 @@ export class IndexedDbIdentityStorage implements IdentityStorage {
         prekey.keyId
       )
     }
-    tx.objectStore(SESSIONS).put(
-      {
-        userId: identity.userId,
-        sessionToken: identity.sessionToken
-      } satisfies StoredSession,
-      identity.userId
-    )
+    tx.objectStore(SESSIONS).put(session, identity.userId)
     await complete(tx)
   }
 
@@ -399,9 +406,11 @@ export class IndexedDbIdentityStorage implements IdentityStorage {
 
   async saveRemoteIdentity(identity: RemoteIdentity): Promise<void> {
     const db = await this.dbPromise
-    // Export public material before creating the IndexedDB transaction. WebCrypto
-    // promises may cross a task boundary, which can make an otherwise idle IDB
-    // transaction inactive in WebKit before the put() call runs.
+    // WebCrypto serialization is asynchronous. Complete it before opening the
+    // read/write transaction: Firefox auto-commits an IndexedDB transaction as
+    // soon as the event-loop turn becomes idle, so awaiting here would leave a
+    // finished transaction and make the following put() fail with
+    // TransactionInactiveError.
     const serialized = await serializeRemoteIdentity(identity)
     const tx = db.transaction([REMOTE_IDENTITIES, SERIALIZED_REMOTE_IDENTITIES], 'readwrite')
     tx.objectStore(REMOTE_IDENTITIES).delete(identity.userId)
@@ -409,7 +418,16 @@ export class IndexedDbIdentityStorage implements IdentityStorage {
     await complete(tx)
   }
 
-  async createX25519KeyPair(): Promise<IdentityKeyPair> {
+  createX25519KeyPair(): Promise<IdentityKeyPair> {
+    const operation = this.x25519CreationQueue.then(() => this.createWrappedX25519KeyPair())
+    this.x25519CreationQueue = operation.then(
+      () => undefined,
+      () => undefined
+    )
+    return operation
+  }
+
+  private async createWrappedX25519KeyPair(): Promise<IdentityKeyPair> {
     const wrappingKey = await this.wrappingKey()
     const generated = asKeyPair(
       await crypto.subtle.generateKey({ name: 'X25519' }, true, ['deriveBits'])
@@ -520,6 +538,47 @@ export class IndexedDbIdentityStorage implements IdentityStorage {
   private wrappingKey(): Promise<CryptoKey> {
     this.wrappingKeyPromise ??= this.loadOrCreateWrappingKey()
     return this.wrappingKeyPromise
+  }
+
+  private async wrapSessionToken(
+    userId: string,
+    sessionToken: string
+  ): Promise<WrappedStoredSession> {
+    const wrappingKey = await this.wrappingKey()
+    const iv = crypto.getRandomValues(new Uint8Array(12))
+    const plaintext = new TextEncoder().encode(sessionToken)
+    const sessionTokenCiphertext = new Uint8Array(
+      await crypto.subtle.encrypt(
+        {
+          name: 'AES-GCM',
+          iv,
+          additionalData: new TextEncoder().encode(`${SESSION_TOKEN_AAD_DOMAIN}:${userId}`)
+        },
+        wrappingKey,
+        plaintext
+      )
+    )
+    plaintext.fill(0)
+    return { userId, sessionTokenCiphertext, iv }
+  }
+
+  private async readSessionToken(session: StoredSession): Promise<string> {
+    if ('sessionToken' in session) return session.sessionToken
+    const wrappingKey = await this.wrappingKey()
+    const plaintext = new Uint8Array(
+      await crypto.subtle.decrypt(
+        {
+          name: 'AES-GCM',
+          iv: session.iv,
+          additionalData: new TextEncoder().encode(`${SESSION_TOKEN_AAD_DOMAIN}:${session.userId}`)
+        },
+        wrappingKey,
+        session.sessionTokenCiphertext
+      )
+    )
+    const sessionToken = new TextDecoder().decode(plaintext)
+    plaintext.fill(0)
+    return sessionToken
   }
 
   private async loadOrCreateWrappingKey(): Promise<CryptoKey> {

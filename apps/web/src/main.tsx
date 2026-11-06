@@ -7,6 +7,7 @@ import {
 import { type FormEvent, StrictMode, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { CollaborativeWorkspace } from './CollaborativeWorkspace'
+import { registerPwa } from './pwa'
 import './styles.css'
 
 const identityServerUrl =
@@ -18,6 +19,19 @@ function createIdentityClient(): IdentityClient {
     provider: new HttpIdentityProvider({ baseUrl: identityServerUrl }),
     storage: new IndexedDbIdentityStorage({ name: 'e2e-col-identity' })
   })
+}
+
+async function restoreIdentity(client: IdentityClient): Promise<UserIdentity | undefined> {
+  if (!navigator.onLine) return client.openLocalSession()
+  try {
+    return await client.openSession()
+  } catch (cause) {
+    // Browser fetch failures are TypeError across the supported engines. Only
+    // network unavailability falls back to local identity material; provider
+    // authentication/integrity errors continue to fail closed.
+    if (cause instanceof TypeError) return client.openLocalSession()
+    throw cause
+  }
 }
 
 function Registration({ onRegistered }: { onRegistered: (identity: UserIdentity) => void }) {
@@ -108,8 +122,7 @@ function App() {
   useEffect(() => {
     let active = true
     const client = createIdentityClient()
-    void client
-      .openSession()
+    void restoreIdentity(client)
       .then((loaded) => {
         if (!active) return
         if (loaded) {
@@ -165,3 +178,5 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </StrictMode>
 )
+
+void registerPwa()

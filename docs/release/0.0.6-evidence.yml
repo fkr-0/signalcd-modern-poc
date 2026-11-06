@@ -1,0 +1,214 @@
+release:
+  project: SignalCD Modern PoC
+  repository: fkr-0/signalcd-modern-poc
+  version_before: 0.0.5
+  version_candidate: 0.0.6
+  proposed_tag: v0.0.6
+  tag_kind: annotated
+  tag_created: false
+  tag_pushed: false
+  channel: technical-preview
+  branch: ci/webkit-diagnose
+  base_revision: 0f5ca44d3c0586760041a672beb82ac0310cbde5
+  base_tag: v0.0.5
+  base_tag_target: 0f5ca44d3c0586760041a672beb82ac0310cbde5
+  candidate_state: uncommitted_working_tree
+  protocol_envelope: v1
+  reason_for_patch_release: >-
+    v0.0.5 already names the base revision, so post-tag browser, storage,
+    security, and PWA hardening is prepared as 0.0.6 rather than mutating
+    the meaning of the existing tag.
+
+scope:
+  included:
+    - WebKit-safe out-of-line IndexedDB identity keys and serialized remote public identity material
+    - AES-GCM wrapping of X25519 private PKCS8 material with non-exportable runtime keys
+    - AES-GCM wrapping of bearer session tokens with user-bound authenticated data
+    - first-load migration of legacy plaintext bearer session records
+    - Firefox IndexedDB transaction-lifetime fix by completing asynchronous WebCrypto serialization before opening the write transaction
+    - serialized persistent X25519 creation to avoid intermittent WebKit WebCrypto provisioning failures
+    - browser offline startup from locally persisted wrapped identity material without treating local restore as remote session validation
+    - installable PWA manifest and 192/512 pixel application icons
+    - versioned service worker application-shell and hashed-asset caching
+    - bounded same-origin Cache API ignoreVary handling for static-host/Vite Vary-Origin module responses
+    - best-effort Background Sync reconnect wakeup without moving encrypted queue ownership into the service worker
+    - CSP and static-host security headers including HSTS, frame denial, no-sniff, no-referrer, permissions policy, and COOP
+    - Chromium, Firefox, and WebKit browser qualification for identity, persistence, encrypted collaboration, observer isolation, and persistent replay
+    - Chromium and Firefox true network-offline reload coverage
+    - WebKit cache-completeness plus forced-provider-outage local-restore coverage
+    - deployment runbook and deterministic static-host archive
+  inherited_dirty_work_preserved:
+    note: >-
+      The checkout was already dirty before this hardening pass. These paths were
+      not reset; some identity/WebKit files were intentionally extended by this task.
+    paths:
+      - apps/android/core/protocol/src/main/kotlin/dev/e2ecol/android/protocol/ProtocolEnvelope.kt
+      - apps/android/core/protocol/src/test/kotlin/dev/e2ecol/android/protocol/EnvelopeKindTest.kt
+      - apps/android/core/protocol/src/test/kotlin/dev/e2ecol/android/protocol/ProtocolEnvelopeCodecTest.kt
+      - docs/ROADMAP.md
+      - docs/android-integration.md
+      - packages/protocol/src/protocol.test.ts
+      - packages/identity/src/storage.ts
+      - packages/identity/src/storage.test.ts
+      - packages/identity/src/types.ts
+      - playwright.config.ts
+      - docs/WEBKIT-QUALIFICATION.md
+      - scripts/test-webkit-container.sh
+  explicitly_not_claimed:
+    - production-security certification
+    - Signal-equivalent durability while all PeerJS participants are offline
+    - completed live two-account Signal qualification
+    - native Android E2EE parity
+    - physical Safari or iOS Add-to-Home-Screen installation smoke
+    - a fully offline first-time remote-capable identity registration flow
+
+verification:
+  workspace_check:
+    command: pnpm run check
+    result: pass
+    version_check: '0.0.6 / 10 workspaces synchronized'
+    biome_files: 147
+    vitest_files_passed: 42
+    vitest_files_skipped: 1
+    vitest_tests_passed: 320
+    vitest_tests_skipped: 1
+    skipped_test: apps/sidecar/src/real-signal.smoke.test.ts
+    production_web_build: pass
+    main_js_minified_kb: 598.35
+    warning: main JavaScript chunk exceeds Vite 500 kB advisory threshold
+  chromium_firefox_e2e:
+    command: 'CI=1 E2E_COL_TEST_TOY_PORT=28216 E2E_COL_TEST_WEB_PORT=4273 pnpm exec playwright test --project=chromium --project=firefox'
+    result: pass
+    tests: 16
+    retries_used: 0
+    duration: 48.3s
+    browsers:
+      chromium: '8/8 pass'
+      firefox: '8/8 pass'
+    behaviors:
+      - browser-owned identity creation and restore
+      - IndexedDB identity and document persistence
+      - wrapped bearer session persistence
+      - PWA manifest/cache installation prerequisites
+      - true network-offline application reload and document restore
+      - isolated browser identities
+      - local metadata restart persistence
+      - encrypted participant key exchange and bidirectional convergence
+      - observer-copy plaintext isolation
+      - persistent-profile durable outbound replay and dedup retention
+  webkit_e2e:
+    command: pnpm run test:e2e:webkit
+    result: pass
+    tests: 8
+    retries_used: 0
+    duration: 24.8s
+    execution: pinned Playwright WebKit container
+    qualification_note: >-
+      Playwright WebKit currently raises an engine-level internal error when its
+      context offline toggle is combined with a service-worker navigation. The
+      WebKit PWA case therefore proves complete runtime cache population and
+      forces the remote identity-session request to fail, then verifies local
+      wrapped-identity/document restore. Chromium and Firefox execute true
+      network-offline reloads.
+  peerjs_browser_e2e:
+    command: pnpm run test:e2e:peerjs
+    result: pass
+    tests: 2
+    browsers:
+      chromium: 'pass, 55.6s'
+      firefox: 'pass, 17.3s'
+    behaviors:
+      - three encrypted browser clients converge through local PeerServer
+      - late replay remains available while replay-carrying participants remain online
+      - elected hub loss triggers survivor reconnect and re-election
+      - post-loss edit converges
+  security_audit:
+    result: pass_with_deployment_constraint
+    secret_logging_search: none
+    private_key_storage:
+      ed25519: non-exportable CryptoKey persisted by IndexedDB
+      x25519: AES-GCM-wrapped PKCS8 at rest; runtime private key imported non-exportable
+      wrapping_key: non-exportable AES-GCM CryptoKey persisted in same browser origin
+    bearer_session_storage: AES-GCM wrapped with user-bound additional authenticated data
+    legacy_bearer_migration: plaintext legacy record is rewritten wrapped on successful load
+    plaintext_buffer_hygiene: temporary decoded PKCS8 and bearer byte buffers are zero-filled after import/decode
+    headers:
+      csp: present
+      strict_transport_security: 'max-age=31536000'
+      x_content_type_options: nosniff
+      x_frame_options: DENY
+      referrer_policy: no-referrer
+      permissions_policy: 'camera=(), microphone=(), geolocation=()'
+      cross_origin_opener_policy: same-origin
+    deployment_constraint: >-
+      The development-capable CSP connect-src permits HTTPS/WSS plus localhost
+      endpoints. Production deployment should narrow connect-src to the exact
+      identity and transport origins selected for that deployment.
+    threat_model_limit: >-
+      Browser-origin wrapping is encryption at rest, not an OS keychain. A
+      compromised same-origin script could still invoke origin-held WebCrypto keys.
+  diff_check:
+    command: git diff --check
+    result: pass
+  artifact_smoke:
+    result: pass
+    checks:
+      - archive checksum validates
+      - extracted files are non-empty
+      - service worker, manifest, CSP headers, HSTS, and PNG install icons are present
+      - archive is generated directly from the final apps/web/dist tree
+
+artifacts:
+  static_web:
+    path: artifacts/signalcd-modern-poc-0.0.6-static.tar.gz
+    size_bytes: 1299607
+    sha256: 15362ab467fe4a6c8fc25e6efd3ee0beddda513bd6d4508f08f87e030dde9b83
+    checksum_file: artifacts/signalcd-modern-poc-0.0.6-static.tar.gz.sha256
+    configuration: localhost_development_defaults
+    remote_production_ready: false
+    production_action: >-
+      Rebuild with exact TLS VITE_E2E_COL_IDENTITY_URL and transport endpoint
+      values, narrow CSP connect-src to those origins, rerun release checks, and
+      regenerate the deterministic archive/checksum before remote deployment.
+    deterministic_tar:
+      sort: name
+      mtime: '2026-09-11T00:00:00Z'
+      owner: 0
+      group: 0
+      numeric_owner: true
+
+known_limitations:
+  pwa_install_ui:
+    status: manual_device_smoke_pending
+    detail: desktop install chrome and Safari/iOS Add to Home Screen are outside the headless test harness
+  webkit_true_offline_navigation:
+    status: automation_tool_limitation
+    detail: Playwright WebKit context.setOffline plus service-worker navigation fails inside the engine before application code runs
+  first_time_offline_identity:
+    status: not_supported_for_remote_capability
+    detail: local restoration is offline-capable after provisioning; first-time remote-capable identity registration still requires the configured identity provider
+  real_signal:
+    status: pending_external_validation
+    skipped_test: apps/sidecar/src/real-signal.smoke.test.ts
+  peerjs_all_peers_offline:
+    status: not_signal_equivalent
+  bundle_size:
+    status: advisory_warning
+    detail: Vite reports the main minified JavaScript chunk at approximately 598.35 kB
+  working_tree:
+    status: dirty_by_design
+    detail: >-
+      Candidate changes are not committed because the checkout contains inherited
+      unrelated/pre-existing work. A release tag must not be created until the
+      intended release diff is isolated and committed to an exact revision.
+
+publication:
+  local_commit: not_requested
+  local_tag: not_created
+  push: not_requested
+  github_release: not_requested
+  deploy: not_requested
+  safe_next_gate: >-
+    Run the physical Safari/iOS install smoke if required, isolate the intended
+    0.0.6 release diff from inherited dirty work, create a release commit, then
+    tag that exact commit only with explicit operator authorization.

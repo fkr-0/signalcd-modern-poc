@@ -7,7 +7,8 @@ enum class EnvelopeKind(val wireName: String, val code: Int) {
     ARCHIVE("archive", 4),
     DELETE("delete", 5),
     HEALTH("health", 6),
-    CHUNK("chunk", 7);
+    CHUNK("chunk", 7),
+    AUTHORIZATION_RESOLUTION("authorization-resolution", 8);
 
     companion object {
         fun fromCode(code: Int): EnvelopeKind =

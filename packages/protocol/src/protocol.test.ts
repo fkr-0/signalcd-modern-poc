@@ -32,6 +32,18 @@ function changeEnvelope(payload = new Uint8Array([1, 2, 3, 4])) {
   })
 }
 
+function authorizationResolutionEnvelope() {
+  return createEnvelope({
+    documentId,
+    messageId,
+    senderId: 'device-A',
+    kind: 'authorization-resolution',
+    createdAt: 1_787_159_200_000,
+    sequence: 7,
+    payload: new Uint8Array([9, 8, 7, 6])
+  })
+}
+
 describe('protocol envelope', () => {
   it('round-trips the v1 binary codec without aliasing payload storage', () => {
     const original = changeEnvelope()
@@ -46,6 +58,40 @@ describe('protocol envelope', () => {
     expect(hex).toBe(
       '45324543010101000001a01afd41000000000000000007002431313131313131312d313131312d343131312d383131312d313131313131313131313131002432323232323232322d323232322d343232322d383232322d32323232323232323232323200086465766963652d410000000401020304'
     )
+  })
+
+  it('keeps the authorization-resolution v1 kind code stable for Android parity', () => {
+    const encoded = encodeEnvelope(authorizationResolutionEnvelope())
+    const hex = Array.from(encoded, (byte) => byte.toString(16).padStart(2, '0')).join('')
+    expect(hex).toBe(
+      '45324543010801000001a01afd41000000000000000007002431313131313131312d313131312d343131312d383131312d313131313131313131313131002432323232323232322d323232322d343232322d383232322d32323232323232323232323200086465766963652d410000000409080706'
+    )
+    expect(decodeEnvelope(encoded).kind).toBe('authorization-resolution')
+  })
+
+  it('keeps authorization-resolution stable as a chunk original kind for Android parity', () => {
+    const original = authorizationResolutionEnvelope()
+    const chunk = createEnvelope({
+      documentId: original.documentId,
+      messageId: '33333333-3333-4333-8333-333333333333',
+      senderId: original.senderId,
+      kind: 'chunk',
+      createdAt: original.createdAt,
+      sequence: 7,
+      chunk: {
+        index: 0,
+        total: 2,
+        originalMessageId: original.messageId,
+        originalKind: 'authorization-resolution'
+      },
+      payload: original.payload
+    })
+    const encoded = encodeEnvelope(chunk)
+    const hex = Array.from(encoded, (byte) => byte.toString(16).padStart(2, '0')).join('')
+    expect(hex).toBe(
+      '45324543010703000001a01afd41000000000000000007002431313131313131312d313131312d343131312d383131312d313131313131313131313131002433333333333333332d333333332d343333332d383333332d33333333333333333333333300086465766963652d410000000000000002002432323232323232322d323232322d343232322d383232322d323232323232323232323232080000000409080706'
+    )
+    expect(decodeEnvelope(encoded).chunk?.originalKind).toBe('authorization-resolution')
   })
 
   it('rejects malformed envelopes and unknown frame kinds', () => {

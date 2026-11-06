@@ -6,6 +6,34 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-09-11
+
+### Added
+
+- Installable web-app metadata and icons plus a versioned service worker that caches the application shell and hashed build assets for offline restart.
+- Browser Background Sync registration when supported. The service worker uses it only as a reconnect wake-up signal; durable CRDT replay remains owned by the application queue and does not move private collaboration state into the worker.
+- Static-host security headers and a matching in-document CSP fallback covering script/style/object/frame/connect/worker boundaries.
+- Browser E2E coverage for offline shell restart, encrypted bearer persistence, manifest/installability prerequisites, and the existing identity/key-exchange/encrypted-convergence paths.
+
+### Changed
+
+- Workspace and Android app versions advance to `0.0.6` because the already-tagged `v0.0.5` artifact cannot be mutated by post-tag release-hardening fixes.
+- X25519 prekey persistence uses WebKit-safe serialized public material plus AES-GCM-wrapped private PKCS#8 material, with non-exportable runtime keys and a non-exportable IndexedDB wrapping key.
+- Bearer session tokens are now AES-GCM wrapped at rest with user-bound authenticated data; legacy plaintext session records migrate on first successful load.
+- Browser E2E setup no longer returns decrypted bearer tokens through Playwright evaluation results, preventing test traces from becoming a secret sink.
+
+### Fixed
+
+- Firefox no longer raises `TransactionInactiveError` while persisting remote identity material: asynchronous WebCrypto serialization completes before the IndexedDB write transaction is opened.
+- Offline restart can restore an already-provisioned local identity without incorrectly requiring an online provider verification round-trip; authentication/integrity errors still fail closed.
+
+### Compatibility and limits
+
+- The PWA shell and local document/identity state can restart offline after one successful online load. First-time identity registration, remote key lookup, and remote message delivery still require their configured provider/transport.
+- Background Sync is advisory rather than a substitute for the application's encrypted durable queue; browsers without the API resume through the normal reconnect/open path.
+- Static deployments must use HTTPS outside localhost and should narrow the shipped `connect-src` policy to the exact identity/transport origins used by that deployment.
+- This remains a research technical preview, not a claim of production security or Signal-equivalent service durability.
+
 ## [0.0.5] - 2026-08-27
 
 ### Added

@@ -116,6 +116,13 @@ payload  = 01 02 03 04
 
 The Kotlin encoder must produce the same full hex fixture as TypeScript, and Kotlin must decode the same bytes. This is the minimum acceptance gate for every Android protocol change.
 
+The v1 kind table is also parity-locked to the canonical TypeScript codec. In particular,
+`authorization-resolution` is wire kind **8** (with `chunk` remaining **7**), because R6 fork
+resolution is part of the current v1 authorization protocol. Executable TypeScript and Kotlin
+goldens cover both a direct `authorization-resolution` envelope and a `chunk` whose
+`originalKind` is `authorization-resolution`; a native decoder must not reject those valid v1
+frames as unknown kinds.
+
 The encrypted `E2EE` wrapper is intentionally not mirrored yet. Native encryption must not ship until Android has equivalent Ed25519/X25519/HKDF/AES-GCM fixtures, key-selector semantics, and recipient-binding validation.
 
 ## 5. App architecture

@@ -115,6 +115,15 @@ export class IdentityClient {
     return identity
   }
 
+  /**
+   * Restore only the browser-owned identity material. This intentionally skips
+   * provider verification and is suitable for offline startup; callers must not
+   * interpret it as evidence that the bearer session is currently valid.
+   */
+  async openLocalSession(): Promise<UserIdentity | undefined> {
+    return this.options.storage.loadLocalIdentity()
+  }
+
   async openSession(): Promise<UserIdentity | undefined> {
     let identity = await this.options.storage.loadLocalIdentity()
     if (!identity) return undefined

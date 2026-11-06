@@ -79,3 +79,53 @@ commands:
     category: build
     cwd: .
     run: ['pnpm', 'run', 'android:assemble']
+
+agent_workflow:
+  version: '1.0'
+  project:
+    id: e2e-col
+    title: e2e-col
+    root: .
+    capacity:
+      max_active_workers: 4
+      max_reserved_packets: 8
+      max_reviewers: 2
+  defaults:
+    queue: managed
+    lease_policy: normal
+    mutation_policy: transactional
+    review_policy: independent-review
+    priority: 50
+  lease_policies:
+    normal: {}
+  mutation_policies:
+    transactional:
+      mode: transaction-required
+      stale_write_protection: sha256
+      capture_preimage: true
+      rollback_on_partial_failure: true
+  review_policies:
+    independent-review:
+      mode: required
+      reviewer:
+        independent: true
+        allow_author: false
+        allow_mutation: false
+      max_rounds: 2
+      on_timeout: blocked
+  queues:
+    managed:
+      title: Managed work
+      capacity: 4
+  opportunities: []
+  governance:
+    strict_validation: true
+    reject_unknown_fields: true
+    overrides:
+      allow_less_restrictive_mutation_policy: false
+      allow_review_bypass: false
+      allow_scope_expansion_at_runtime: false
+    recovery:
+      allow_dirty_requeue: false
+    derived_opportunities:
+      promotion: operator_gate

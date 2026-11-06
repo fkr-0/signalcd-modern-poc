@@ -157,6 +157,32 @@ describe('IndexedDbIdentityStorage key lifecycle', () => {
     upgraded.close()
   })
 
+  it('stores the bearer session encrypted at rest and restores it transparently', async () => {
+    const name = `identity-session-wrap-${crypto.randomUUID()}`
+    const identity: UserIdentity = {
+      userId: '10000000-0000-4000-8000-000000000124',
+      phoneNumber: '+15550000124',
+      displayName: 'Wrapped session fixture',
+      identityKeyPair: await ed25519(),
+      signedPrekeyPair: await signedPrekey('current', 100),
+      retiredSignedPrekeys: [],
+      oneTimePrekeys: [],
+      sessionToken: 'bearer-secret-must-not-be-plaintext',
+      createdAt: 80
+    }
+    const storage = new IndexedDbIdentityStorage({ indexedDB: fakeIndexedDb, name })
+
+    await storage.saveLocalIdentity(identity)
+    const raw = await readStoreRecord<Record<string, unknown>>(name, 'sessions_v2', identity.userId)
+
+    expect(raw).not.toHaveProperty('sessionToken')
+    expect(raw).toHaveProperty('sessionTokenCiphertext')
+    expect(raw).toHaveProperty('iv')
+    expect(JSON.stringify(raw)).not.toContain(identity.sessionToken)
+    expect((await storage.loadLocalIdentity())?.sessionToken).toBe(identity.sessionToken)
+    await storage.close()
+  })
+
   it('migrates v1 inline-key stores to out-of-line keys without losing private key material', async () => {
     const name = `identity-v1-migration-${crypto.randomUUID()}`
     const identityKeyPair = await ed25519()
@@ -215,7 +241,54 @@ describe('IndexedDbIdentityStorage key lifecycle', () => {
       migrated.transaction('remote_identities_v2').objectStore('remote_identities_v2').keyPath
     ).toBeNull()
     expect(migrated.transaction('sessions_v2').objectStore('sessions_v2').keyPath).toBeNull()
+    const migratedSession = await requestValue<Record<string, unknown> | undefined>(
+      migrated
+        .transaction('sessions_v2')
+        .objectStore('sessions_v2')
+        .get('10000000-0000-4000-8000-000000000321')
+    )
+    expect(migratedSession).not.toHaveProperty('sessionToken')
+    expect(migratedSession).toHaveProperty('sessionTokenCiphertext')
     migrated.close()
+  })
+
+  it('round-trips serialized remote public identity material', async () => {
+    const name = `identity-remote-${crypto.randomUUID()}`
+    const identity = await ed25519()
+    const signed = await crypto.subtle.generateKey({ name: 'X25519' }, false, ['deriveBits'])
+    const oneTime = await crypto.subtle.generateKey({ name: 'X25519' }, false, ['deriveBits'])
+    const remote: RemoteIdentity = {
+      userId: '10000000-0000-4000-8000-000000000777',
+      phoneNumber: '+15550000777',
+      displayName: 'Remote fixture',
+      identityKeyPublic: identity.publicKey,
+      signedPrekeyPublic: signed.publicKey,
+      oneTimePrekey: oneTime.publicKey,
+      verified: true,
+      fetchedAt: 1234
+    }
+    const storage = new IndexedDbIdentityStorage({ indexedDB: fakeIndexedDb, name })
+
+    await storage.saveRemoteIdentity(remote)
+    const loaded = await storage.loadRemoteIdentity(remote.userId)
+
+    expect(loaded).toMatchObject({
+      userId: remote.userId,
+      phoneNumber: remote.phoneNumber,
+      displayName: remote.displayName,
+      verified: true,
+      fetchedAt: 1234
+    })
+    expect(await exportRawKey(loaded!.identityKeyPublic)).toBe(
+      await exportRawKey(remote.identityKeyPublic)
+    )
+    expect(await exportRawKey(loaded!.signedPrekeyPublic)).toBe(
+      await exportRawKey(remote.signedPrekeyPublic)
+    )
+    expect(await exportRawKey(loaded!.oneTimePrekey!)).toBe(
+      await exportRawKey(remote.oneTimePrekey!)
+    )
+    await storage.close()
   })
 })
 
@@ -249,6 +322,26 @@ async function openSchemaV3Database(name: string): Promise<IDBDatabase> {
       ])
         db.createObjectStore(store)
     }
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+}
+
+async function readStoreRecord<T>(name: string, store: string, key: IDBValidKey): Promise<T> {
+  const db = await openDatabase(name)
+  try {
+    const value = await requestValue<T | undefined>(
+      db.transaction(store).objectStore(store).get(key)
+    )
+    if (value === undefined) throw new Error(`missing ${store} record`)
+    return value
+  } finally {
+    db.close()
+  }
+}
+
+async function requestValue<T>(request: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => reject(request.error)
   })

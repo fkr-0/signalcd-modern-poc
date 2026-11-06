@@ -7,7 +7,6 @@ const rendezvousCapability = 'peerjs-browser-e2e-capability-0123456789abcdef'
 interface StoredIdentityClaim {
   readonly userId: string
   readonly phoneNumber: string
-  readonly sessionToken: string
 }
 
 async function register(page: Page, name: string): Promise<void> {
@@ -33,7 +32,12 @@ async function storedIdentity(page: Page): Promise<StoredIdentityClaim> {
         request.onerror = () => reject(request.error ?? new Error(`failed to read ${store}`))
       })
     const identities = await readAll<{ userId: string; phoneNumber: string }>('identities_v2')
-    const sessions = await readAll<{ userId: string; sessionToken: string }>('sessions_v2')
+    const sessions = await readAll<{
+      userId: string
+      sessionTokenCiphertext?: Uint8Array
+      iv?: Uint8Array
+      sessionToken?: string
+    }>('sessions_v2')
     db.close()
     if (
       identities.length !== 1 ||
@@ -41,10 +45,15 @@ async function storedIdentity(page: Page): Promise<StoredIdentityClaim> {
       identities[0]?.userId !== sessions[0]?.userId
     )
       throw new Error('expected exactly one persisted browser identity/session')
+    if (
+      sessions[0]?.sessionToken !== undefined ||
+      sessions[0]?.sessionTokenCiphertext === undefined ||
+      sessions[0]?.iv === undefined
+    )
+      throw new Error('browser bearer session was not wrapped at rest')
     return {
       userId: identities[0]!.userId,
-      phoneNumber: identities[0]!.phoneNumber,
-      sessionToken: sessions[0]!.sessionToken
+      phoneNumber: identities[0]!.phoneNumber
     }
   })
 }
@@ -59,19 +68,61 @@ async function createLocallyRootedDocument(page: Page): Promise<string> {
 }
 
 async function createEncryptedGroup(
+  page: Page,
   identity: StoredIdentityClaim,
   documentId: string
 ): Promise<string> {
-  const response = await fetch(`${toyBaseUrl}/api/v1/groups`, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${identity.sessionToken}`,
-      'content-type': 'application/json'
+  const result = await page.evaluate(
+    async ({ baseUrl, expectedUserId, targetDocumentId }) => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open('e2e-col-identity')
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () => reject(request.error ?? new Error('identity database open failed'))
+      })
+      const session = await new Promise<{
+        userId: string
+        sessionTokenCiphertext: Uint8Array
+        iv: Uint8Array
+      }>((resolve, reject) => {
+        const request = db.transaction('sessions_v2').objectStore('sessions_v2').get(expectedUserId)
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () => reject(request.error ?? new Error('failed to read wrapped session'))
+      })
+      const wrappingKey = await new Promise<CryptoKey>((resolve, reject) => {
+        const request = db
+          .transaction('wrapping_keys_v3')
+          .objectStore('wrapping_keys_v3')
+          .get('x25519-aes-gcm-v1')
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () => reject(request.error ?? new Error('failed to read wrapping key'))
+      })
+      db.close()
+      const plaintext = new Uint8Array(
+        await crypto.subtle.decrypt(
+          {
+            name: 'AES-GCM',
+            iv: session.iv,
+            additionalData: new TextEncoder().encode(`e2e-col/session-token/v1:${session.userId}`)
+          },
+          wrappingKey,
+          session.sessionTokenCiphertext
+        )
+      )
+      const token = new TextDecoder().decode(plaintext)
+      plaintext.fill(0)
+      const response = await fetch(`${baseUrl}/api/v1/groups`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ document_id: targetDocumentId, name: 'PeerJS browser E2E' })
+      })
+      const body = (await response.json()) as { group_id?: string }
+      return { status: response.status, groupId: body.group_id }
     },
-    body: JSON.stringify({ document_id: documentId, name: 'PeerJS browser E2E' })
-  })
-  expect(response.status).toBe(201)
-  return ((await response.json()) as { group_id: string }).group_id
+    { baseUrl: toyBaseUrl, expectedUserId: identity.userId, targetDocumentId: documentId }
+  )
+  expect(result.status).toBe(201)
+  if (!result.groupId) throw new Error('group creation did not return group_id')
+  return result.groupId
 }
 
 async function openPeerJsGroup(page: Page, groupId: string, documentId: string): Promise<void> {
@@ -151,7 +202,7 @@ test('three encrypted browser clients converge through local PeerServer and surv
     const charlie = await storedIdentity(charliePage)
 
     const documentId = await createLocallyRootedDocument(alicePage)
-    const groupId = await createEncryptedGroup(alice, documentId)
+    const groupId = await createEncryptedGroup(alicePage, alice, documentId)
     await openPeerJsGroup(alicePage, groupId, documentId)
     await invite(alicePage, bob)
     await openPeerJsGroup(bobPage, groupId, documentId)
